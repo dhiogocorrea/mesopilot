@@ -1,0 +1,411 @@
+// Orimaz Wellness — training domain model.
+//
+// Nothing here is provider-specific: no enums (stored as String + TS union
+// types), no arrays, no Json columns (JSON is stored as String and parsed
+// through typed helpers in src/lib/json.ts). That kept the move off SQLite to
+// a one-line datasource change; keep it that way.
+//
+// All loads are stored in kilograms. Display units are a per-user preference.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ---------------------------------------------------------------- user
+
+model User {
+  id   String @id @default(cuid())
+  name String
+
+  /// Stored lowercased; `usernameLower` is what the login query matches on so
+  /// "Dhiogo" and "dhiogo" cannot become two accounts. The display form is kept
+  /// separately because case is part of how people write their own name.
+  username      String @unique
+  usernameLower String @unique
+
+  /// scrypt, as `salt:derivedKey` in hex. Never a plaintext password, and never
+  /// selected into anything that reaches a client component.
+  passwordHash String
+
+  locale    String   @default("en") // Locale: "en" | "pt"
+  unit      String   @default("kg") // WeightUnit: "kg" | "lb"
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  profile    Profile?
+  landmarks  UserMuscleLandmark[]
+  mesocycles Mesocycle[]
+  exercises  Exercise[]
+  templates  ProgramTemplate[]
+  tracks     ProgramTrack[]
+  sessions   AuthSession[]
+}
+
+/// A logged-in browser. Named for what it is rather than `Session`, which this
+/// schema already uses for a training session.
+model AuthSession {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// SHA-256 of the cookie value, never the value itself: a leaked database
+  /// dump must not hand out working sessions.
+  tokenHash String @unique
+
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+}
+
+/// Anamnesis. Feeds both the deterministic engine (experience level sets the
+/// starting RIR and progression aggressiveness) and the AI coaching layer.
+model Profile {
+  id     String @id @default(cuid())
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  birthDate    DateTime?
+  sex          String? // "male" | "female" | "other"
+  heightCm     Float?
+  bodyweightKg Float?
+
+  experience    String @default("intermediate") // Experience: "beginner" | "intermediate" | "advanced"
+  trainingYears Float?
+  primaryGoal   String @default("hypertrophy") // Goal: "hypertrophy" | "strength" | "fatloss" | "general"
+
+  daysPerWeek    Int @default(4)
+  sessionMinutes Int @default(60)
+
+  // Recovery context, 1..5. Low sleep / high stress / poor nutrition make the
+  // engine more conservative about adding volume.
+  sleepQuality     Int    @default(3)
+  stressLevel      Int    @default(3)
+  nutritionQuality Int    @default(3)
+  caloricState     String @default("maintenance") // "deficit" | "maintenance" | "surplus"
+
+  injuries  String? // JSON: string[]
+  equipment String? // JSON: Equipment[]
+  notes     String?
+
+  updatedAt DateTime @updatedAt
+}
+
+// ------------------------------------------------------- muscle + volume
+
+/// Weekly set landmarks per Renaissance Periodization:
+/// MV  = maintenance volume
+/// MEV = minimum effective volume  (where a mesocycle starts)
+/// MAV = maximum adaptive volume   (the productive middle)
+/// MRV = maximum recoverable volume (the ceiling; hitting it triggers a deload)
+model MuscleGroup {
+  id     String @id @default(cuid())
+  key    String @unique
+  nameEn String
+  namePt String
+  order  Int    @default(0)
+
+  mv  Int @default(6)
+  mev Int @default(8)
+  mav Int @default(16)
+  mrv Int @default(22)
+
+  exercises        Exercise[]
+  landmarks        UserMuscleLandmark[]
+  templateSlots    ProgramTemplateSlot[]
+  sessionExercises SessionExercise[]
+}
+
+/// Per-user calibration of the landmarks above. Written by the engine as it
+/// learns how much volume this person actually recovers from.
+model UserMuscleLandmark {
+  id            String      @id @default(cuid())
+  userId        String
+  user          User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  muscleGroupId String
+  muscleGroup   MuscleGroup @relation(fields: [muscleGroupId], references: [id], onDelete: Cascade)
+
+  mev Int
+  mav Int
+  mrv Int
+
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, muscleGroupId])
+}
+
+// ------------------------------------------------------------- exercises
+
+model Exercise {
+  id     String  @id @default(cuid())
+  key    String? @unique // set for seeded exercises, null for user-created ones
+  nameEn String
+  namePt String
+
+  muscleGroupId String
+  muscleGroup   MuscleGroup @relation(fields: [muscleGroupId], references: [id], onDelete: Cascade)
+  secondary     String? // JSON: string[] of MuscleGroup.key
+
+  equipment    String @default("barbell") // Equipment
+  movementType String @default("compound") // "compound" | "isolation"
+
+  defaultRepMin  Int @default(8)
+  defaultRepMax  Int @default(12)
+  defaultRestSec Int @default(60)
+
+  /// Stimulus-to-fatigue ratio, 1..5. Higher is a better volume buy.
+  /// Used to pick which exercise gains sets first when volume is added.
+  sfr Int @default(3)
+
+  isCustom Boolean @default(false)
+  userId   String?
+  user     User?   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  notes    String?
+  archived Boolean @default(false)
+
+  /// A form demonstration for this movement. Null means the UI falls back to a
+  /// search built from the exercise's own name, which can never point at the
+  /// wrong lift. The seed only ever fills this when it is null, so re-seeding
+  /// cannot wipe a link the athlete curated.
+  demoUrl String?
+
+  /// "inferred" — picked automatically by matching a search result title, and
+  /// never watched by anyone. Shown as unverified so it can be checked.
+  /// "user" — set deliberately by the athlete; trusted.
+  demoSource String?
+
+  templateSlots    ProgramTemplateSlot[]
+  sessionExercises SessionExercise[]
+}
+
+// ------------------------------------------------------------- templates
+
+model ProgramTemplate {
+  id     String  @id @default(cuid())
+  key    String? @unique
+  nameEn String
+  namePt String
+  descEn String  @default("")
+  descPt String  @default("")
+
+  daysPerWeek Int
+  weeks       Int    @default(5) // includes the trailing deload week
+  level       String @default("intermediate")
+  goal        String @default("hypertrophy")
+
+  /// Typical length of one session in minutes, derived from the program's own
+  /// slots at seed time (see src/lib/training-time.ts) rather than guessed, so
+  /// it stays truthful when the exercise list changes. Used to match the
+  /// athlete's declared time budget.
+  estimatedMinutes Int @default(60)
+
+  isCustom Boolean @default(false)
+  userId   String?
+  user     User?   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// Where a custom program came from. Null means the athlete built it here;
+  /// "import" means it was read out of a file they own. Both are editable and
+  /// both are theirs, but only the first is *by* them — labelling an imported
+  /// program "My program" would credit them for someone else's work.
+  source String?
+
+  days         ProgramTemplateDay[]
+  mesocycles   Mesocycle[]
+  trackEntries ProgramTrackEntry[]
+}
+
+/// An ordered sequence of blocks — a macrocycle. A published program is often
+/// several blocks meant to be run back to back (build, then novelty, then a
+/// harder grind); without this they arrive as unrelated entries in the picker
+/// and the athlete has to remember the order themselves.
+model ProgramTrack {
+  id     String  @id @default(cuid())
+  key    String? @unique
+  nameEn String
+  namePt String
+  descEn String  @default("")
+  descPt String  @default("")
+
+  isCustom Boolean @default(false)
+  userId   String?
+  user     User?   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// See ProgramTemplate.source.
+  source String?
+
+  entries    ProgramTrackEntry[]
+  mesocycles Mesocycle[]
+}
+
+model ProgramTrackEntry {
+  id      String       @id @default(cuid())
+  trackId String
+  track   ProgramTrack @relation(fields: [trackId], references: [id], onDelete: Cascade)
+
+  order      Int
+  templateId String
+  template   ProgramTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+
+  @@unique([trackId, order])
+}
+
+model ProgramTemplateDay {
+  id         String          @id @default(cuid())
+  templateId String
+  template   ProgramTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+
+  order   Int
+  labelEn String
+  labelPt String
+
+  slots ProgramTemplateSlot[]
+
+  @@unique([templateId, order])
+}
+
+model ProgramTemplateSlot {
+  id    String             @id @default(cuid())
+  dayId String
+  day   ProgramTemplateDay @relation(fields: [dayId], references: [id], onDelete: Cascade)
+
+  order         Int
+  exerciseId    String
+  exercise      Exercise    @relation(fields: [exerciseId], references: [id], onDelete: Cascade)
+  muscleGroupId String
+  muscleGroup   MuscleGroup @relation(fields: [muscleGroupId], references: [id], onDelete: Cascade)
+
+  startingSets Int @default(3)
+  repMin       Int @default(8)
+  repMax       Int @default(12)
+  restSec      Int @default(120)
+
+  @@unique([dayId, order])
+}
+
+// ------------------------------------------------------------ mesocycles
+
+model Mesocycle {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  templateId String?
+  template   ProgramTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
+
+  /// Set when this block is one step of a track. Position is an index rather
+  /// than a reference to the entry row, because re-importing a program rebuilds
+  /// its entries and would orphan a foreign key mid-track.
+  trackId       String?
+  track         ProgramTrack? @relation(fields: [trackId], references: [id], onDelete: SetNull)
+  trackPosition Int?
+
+  name        String
+  weeks       Int    @default(5)
+  daysPerWeek Int
+  /// RIR target for week 1. Ramps linearly to 0 on the last training week.
+  startRir    Int    @default(3)
+
+  status      String    @default("active") // "active" | "completed" | "abandoned"
+  startedAt   DateTime  @default(now())
+  completedAt DateTime?
+  notes       String?
+
+  sessions Session[]
+}
+
+model Session {
+  id          String    @id @default(cuid())
+  mesocycleId String
+  mesocycle   Mesocycle @relation(fields: [mesocycleId], references: [id], onDelete: Cascade)
+
+  week     Int
+  dayIndex Int
+  label    String
+  isDeload Boolean @default(false)
+
+  status       String    @default("planned") // "planned" | "in_progress" | "completed" | "skipped"
+  scheduledFor DateTime?
+  startedAt    DateTime?
+  completedAt  DateTime?
+  notes        String?
+
+  entries SessionExercise[]
+
+  @@unique([mesocycleId, week, dayIndex])
+}
+
+model SessionExercise {
+  id        String  @id @default(cuid())
+  sessionId String
+  session   Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  order         Int
+  exerciseId    String
+  exercise      Exercise    @relation(fields: [exerciseId], references: [id], onDelete: Cascade)
+  muscleGroupId String
+  muscleGroup   MuscleGroup @relation(fields: [muscleGroupId], references: [id], onDelete: Cascade)
+
+  targetSets Int
+  repMin     Int
+  repMax     Int
+  targetRir  Int
+  restSec    Int @default(120)
+
+  // Post-exercise autoregulation feedback. Null until the user answers.
+  soreness  Int? // 0 never sore .. 3 still sore
+  pump      Int? // 0 low .. 2 amazing
+  workload  Int? // 0 easy .. 3 too much
+  jointPain Int? // 0 none .. 2 a lot
+
+  aiNote String?
+
+  sets      SetLog[]
+  decisions ProgressionDecision[] @relation("DecisionTarget")
+
+  @@unique([sessionId, order])
+}
+
+model SetLog {
+  id                String          @id @default(cuid())
+  sessionExerciseId String
+  sessionExercise   SessionExercise @relation(fields: [sessionExerciseId], references: [id], onDelete: Cascade)
+
+  order     Int
+  weightKg  Float?
+  reps      Int?
+  rir       Int?
+  completed Boolean   @default(false)
+  isWarmup  Boolean   @default(false)
+  loggedAt  DateTime?
+
+  @@unique([sessionExerciseId, order])
+}
+
+/// Audit trail: why the next session looks the way it does. Every prescription
+/// change is explained, so the app can always answer "why am I doing 4 sets?".
+model ProgressionDecision {
+  id String @id @default(cuid())
+
+  /// The upcoming SessionExercise this decision produced.
+  sessionExerciseId String
+  sessionExercise   SessionExercise @relation("DecisionTarget", fields: [sessionExerciseId], references: [id], onDelete: Cascade)
+
+  /// The completed SessionExercise the decision was derived from.
+  sourceExerciseId String?
+
+  source       String @default("rule") // "rule" | "ai" | "manual"
+  setDelta     Int    @default(0)
+  loadDeltaPct Float  @default(0)
+  targetRir    Int
+
+  reasonEn String
+  reasonPt String
+  payload  String? // JSON snapshot of the engine inputs
+
+  createdAt DateTime @default(now())
+}

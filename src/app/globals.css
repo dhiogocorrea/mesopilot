@@ -1,0 +1,202 @@
+@import "tailwindcss";
+
+/*
+ * MesoPilot visual system.
+ *
+ * Designed for a phone held in one hand next to a rack. Committed to dark —
+ * there is one surface to design against, so contrast and hairlines can be
+ * tuned precisely instead of compromised across two themes.
+ *
+ * Structure comes from typography, spacing and hairlines, not from boxing
+ * everything. Colour is reserved: the accent marks what you can act on and
+ * what is live, and nothing else.
+ *
+ * The register is strength-gym rather than wellness-app: near-black, one
+ * signal red, and condensed uppercase display type. That vocabulary is common
+ * to the whole category — it is not anyone's identity, and nothing here copies
+ * a competitor's mark, wordmark or brand colour.
+ */
+
+@theme {
+  /* Canvas → raised. The steps are deliberately small; on dark, a heavy
+     surface jump reads as a modal rather than as grouping. */
+  --color-canvas: #0b0b0c;
+  --color-surface: #141416;
+  --color-surface-2: #1c1c1f;
+  --color-surface-3: #26262a;
+
+  --color-ink: #fafaf9;
+  --color-ink-2: #a1a1a8;
+  --color-ink-3: #6e6e76;
+
+  /* Signal red. Pulled slightly off pure red and desaturated a touch, because
+     a fully saturated red on near-black vibrates at small sizes — and the
+     accent's job here is a 13px chip as often as a button. */
+  --color-accent: #e12b34;
+  --color-accent-hot: #ff4750;
+  /* White, not near-black: red is dark enough that inverted text on it is the
+     only readable option. */
+  --color-accent-ink: #ffffff;
+
+  --color-warn: #f5b83c;
+  --color-danger: #ff4d4d;
+  --color-info: #5aa9e6;
+
+  /*
+   * The platform UI font, deliberately. Fetching a webfont at build time makes
+   * the build fail without network egress, and fetching one at runtime costs a
+   * round trip and a flash of unstyled text on the one screen — the logger —
+   * where you are looking at numbers between sets. SF Pro and Roboto both have
+   * excellent tabular figures, which is what this app actually needs.
+   */
+  --font-sans:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue",
+    ui-sans-serif, system-ui, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+
+  /*
+   * Condensed display face for headings and the wordmark — the tall, narrow,
+   * all-caps look every strength gym uses. Still no webfont, for the reasons
+   * above; every entry here ships with a platform. Where none matches (older
+   * iOS), it falls back to the sans and the `font-stretch` below narrows a
+   * variable face if one is available. Never use this for figures: condensed
+   * digits are exactly what you do not want mid-set.
+   */
+  --font-display:
+    "Roboto Condensed", "Helvetica Neue Condensed Bold", "HelveticaNeue-CondensedBold",
+    "Avenir Next Condensed", "Arial Narrow", var(--font-sans);
+
+  /* Type scale. Numbers are the hero of this app, so the display sizes are
+     tuned for figures rather than prose. */
+  --text-display: 2.75rem;
+  --text-display--line-height: 1;
+  --text-display--letter-spacing: -0.035em;
+  --text-display--font-weight: 700;
+
+  --text-title: 1.5rem;
+  --text-title--line-height: 1.15;
+  --text-title--letter-spacing: -0.02em;
+  --text-title--font-weight: 700;
+
+  --text-headline: 1.0625rem;
+  --text-headline--line-height: 1.3;
+  --text-headline--letter-spacing: -0.01em;
+  --text-headline--font-weight: 600;
+
+  --text-label: 0.6875rem;
+  --text-label--line-height: 1.2;
+  --text-label--letter-spacing: 0.09em;
+  --text-label--font-weight: 600;
+}
+
+:root {
+  color-scheme: dark;
+  --hairline: rgba(255, 255, 255, 0.07);
+  --hairline-strong: rgba(255, 255, 255, 0.13);
+  --accent-soft: rgba(225, 43, 52, 0.14);
+  --accent-line: rgba(225, 43, 52, 0.36);
+}
+
+/*
+ * Headings and the wordmark. Uppercase and tightened, because the condensed
+ * faces above are at their best set that way and at their worst as prose.
+ */
+@utility display-face {
+  font-family: var(--font-display);
+  font-stretch: 87.5%;
+  text-transform: uppercase;
+  letter-spacing: 0.01em;
+}
+
+@theme inline {
+  --color-hairline: var(--hairline);
+  --color-hairline-strong: var(--hairline-strong);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-line: var(--accent-line);
+}
+
+html {
+  background: var(--color-canvas);
+  color: var(--color-ink);
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  font-family: var(--font-sans);
+  overscroll-behavior-y: none;
+  /* Figures must never reflow as they change mid-set. */
+  font-variant-numeric: tabular-nums;
+}
+
+/* The set logger's number inputs are hand-tuned; native spinners fight the
+   layout and are impossible to hit accurately on a phone. */
+input[type="number"] {
+  -moz-appearance: textfield;
+}
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--color-ink-3);
+}
+
+::selection {
+  background: var(--accent-line);
+  color: var(--color-ink);
+}
+
+/* A visible focus ring only for keyboard users — a persistent ring on every
+   tapped control is noise on a touchscreen. */
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+  border-radius: 0.5rem;
+}
+
+@utility safe-bottom {
+  padding-bottom: max(1rem, env(safe-area-inset-bottom));
+}
+
+/** Minimum comfortable touch target. */
+@utility tap {
+  min-height: 2.75rem;
+  min-width: 2.75rem;
+}
+
+/** Hairline rules that read as separators rather than as borders. */
+@utility rule-y {
+  border-block-end: 1px solid var(--hairline);
+}
+
+/** Full-bleed within the padded page gutter. */
+@utility bleed {
+  margin-inline: -1.25rem;
+  padding-inline: 1.25rem;
+}
+
+/**
+ * Swipeable strips keep their scrolling but lose the bar. A visible scrollbar
+ * is a desktop affordance; on a phone it is just a grey smear under the row.
+ */
+@utility no-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
