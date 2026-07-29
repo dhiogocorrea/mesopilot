@@ -86,8 +86,6 @@ export function AuthForm({ initialMode = "signIn" }: { initialMode?: "signIn" | 
               : t("auth.createAccount")}
         </Button>
       </form>
-
-      <p className="mt-8 text-xs leading-relaxed text-ink-3">{t("auth.privacyNote")}</p>
     </div>
   );
 }

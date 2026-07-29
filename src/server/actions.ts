@@ -18,6 +18,7 @@ import {
   MOVEMENT_TYPES,
   WEIGHT_UNITS,
 } from "@/lib/types";
+import { awardAchievements } from "./achievements";
 import { coachSession } from "./coach";
 import { abandonMesocycle, createMesocycleFromTemplate } from "./mesocycle";
 import {
@@ -476,7 +477,7 @@ export async function saveSessionNotes(sessionId: string, notes: string): Promis
  */
 export async function finishSession(sessionId: string): Promise<void> {
   const id = z.string().min(1).parse(sessionId);
-  const { userId, unit, recovery } = await getUserContext();
+  const { userId, locale, unit, recovery } = await getUserContext();
   await assertOwnsSession(id, userId);
 
   await db.session.update({
@@ -494,8 +495,18 @@ export async function finishSession(sessionId: string): Promise<void> {
     }
   }
 
+  // After the session is saved and the block has had its chance to complete, so
+  // "finish a block" can fire on the session that finished it. Swallows its own
+  // failures for the same reason the coach does.
+  const earned = await awardAchievements(userId, locale);
+
   revalidatePath("/", "layout");
-  redirect(`/session/${id}/summary`);
+
+  // Carried in the URL rather than in a store: the summary re-renders on a
+  // refresh and a back-navigation, and the page re-checks every key against
+  // what the athlete actually holds before showing it.
+  const query = earned.length > 0 ? `?earned=${earned.map((a) => a.key).join(",")}` : "";
+  redirect(`/session/${id}/summary${query}`);
 }
 
 // ------------------------------------------------------------ exercises

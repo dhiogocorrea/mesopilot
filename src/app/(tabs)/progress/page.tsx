@@ -1,7 +1,22 @@
-import { Chip, EmptyState, List, Row, Screen, ScreenHeader, Section, Stat } from "@/components/ui";
+import { Medal } from "@/components/medal";
+import {
+  Chevron,
+  Chip,
+  cx,
+  EmptyState,
+  List,
+  Row,
+  RowLink,
+  Screen,
+  ScreenHeader,
+  Section,
+  Stat,
+} from "@/components/ui";
 import { db } from "@/lib/db";
 import { createTranslator, formatDate, formatNumber, localized } from "@/lib/i18n";
 import { estimateOneRepMax, fromKg } from "@/lib/units";
+import { achievementSummary } from "@/server/achievements";
+import { incomingRequests, listFriends } from "@/server/friends";
 import { getActiveMesocycle } from "@/server/mesocycle";
 import { getLandmarks, getUserContext } from "@/server/user";
 
@@ -9,7 +24,8 @@ export default async function ProgressPage() {
   const { userId, locale, unit } = await getUserContext();
   const t = createTranslator(locale);
 
-  const [mesocycle, landmarks, muscles, recent] = await Promise.all([
+  const [mesocycle, landmarks, muscles, recent, achievements, friends, requests] =
+    await Promise.all([
     getActiveMesocycle(userId),
     getLandmarks(userId),
     db.muscleGroup.findMany({ orderBy: { order: "asc" } }),
@@ -19,12 +35,72 @@ export default async function ProgressPage() {
       take: 8,
       include: { entries: { include: { exercise: true, sets: true } } },
     }),
+    achievementSummary(userId, locale),
+    listFriends(userId),
+    incomingRequests(userId),
   ]);
+
+  // Rendered in both branches. Achievements and a waiting friend request are
+  // exactly what someone with no logged sessions still needs to reach, and an
+  // early return that skipped them left the request with no way in.
+  const social = (
+    <Section>
+      <List>
+        <Row>
+          <RowLink href="/achievements">
+            {achievements.unlocked[0] ? (
+              <Medal tier={achievements.unlocked[0].tier} size="sm" />
+            ) : (
+              <Medal tier="bronze" size="sm" locked />
+            )}
+            <span className="min-w-0 flex-1">
+              <span className="block text-[15px] font-medium">{t("achv.viewAll")}</span>
+              <span className="mt-0.5 block truncate text-[13px] text-ink-3">
+                {achievements.unlocked.length > 0
+                  ? t("achv.earnedOf", {
+                      earned: achievements.unlocked.length,
+                      total: achievements.unlocked.length + achievements.locked.length,
+                    })
+                  : t("achv.none")}
+              </span>
+            </span>
+            <span className="shrink-0 text-[15px] font-semibold tabular-nums text-accent">
+              {formatNumber(achievements.points, locale)}
+            </span>
+            <Chevron />
+          </RowLink>
+        </Row>
+        <Row>
+          <RowLink href="/friends">
+            <span
+              aria-hidden="true"
+              className={cx(
+                "size-2 shrink-0 rounded-full",
+                requests.length > 0 ? "bg-accent" : "bg-surface-3",
+              )}
+            />
+            <span className="min-w-0 flex-1">
+              <span className="block text-[15px] font-medium">{t("friends.title")}</span>
+              <span className="mt-0.5 block truncate text-[13px] text-ink-3">
+                {requests.length > 0
+                  ? t("friends.incoming")
+                  : friends.length > 0
+                    ? friends.map((friend) => friend.name).join(", ")
+                    : t("friends.none")}
+              </span>
+            </span>
+            <Chevron />
+          </RowLink>
+        </Row>
+      </List>
+    </Section>
+  );
 
   if (recent.length === 0) {
     return (
       <>
         <ScreenHeader title={t("progress.title")} />
+        <Screen>{social}</Screen>
         <EmptyState title={t("progress.noData")} body={t("progress.noDataBody")} />
       </>
     );
@@ -78,6 +154,8 @@ export default async function ProgressPage() {
       <ScreenHeader title={t("progress.title")} />
 
       <Screen>
+        {social}
+
         {/* The headline figures, before any breakdown. */}
         <div className="mb-9 grid grid-cols-3 gap-4">
           <Stat value={String(recent.length)} label={t("progress.recentSessions")} />

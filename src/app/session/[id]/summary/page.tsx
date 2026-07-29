@@ -6,20 +6,29 @@ import { db } from "@/lib/db";
 import { formatRepRange } from "@/lib/format";
 import { createTranslator, formatNumber, localized } from "@/lib/i18n";
 import { fromKg } from "@/lib/units";
+import { Medal } from "@/components/medal";
+import { unlockedByKeys } from "@/server/achievements";
 import { countLoggedSets, getSessionDetail, sessionTonnage } from "@/server/session";
 import { getUserContext } from "@/server/user";
 
 export default async function SessionSummaryPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string }>;
+  searchParams: Promise<{ earned?: string }>;
 }) {
   const { id } = await params;
+  const { earned } = await searchParams;
   const { userId, locale, unit } = await getUserContext();
   const t = createTranslator(locale);
 
   const session = await getSessionDetail(id, userId);
   if (!session) notFound();
+
+  // Validated against the athlete's own collection, so a hand-edited query
+  // string shows nothing rather than a medal nobody earned.
+  const medals = await unlockedByKeys(userId, earned?.split(",").filter(Boolean) ?? [], locale);
 
   // The session the progression engine wrote from this one.
   const next = await db.session.findFirst({
@@ -48,6 +57,34 @@ export default async function SessionSummaryPage({
           {t("common.week")} {session.week} · {session.label}
         </p>
         <h1 className="display-face text-display mt-2">{t("session.summary")}</h1>
+
+        {medals.length > 0 && (
+          <div className="mt-7 rounded-2xl border border-accent-line bg-accent-soft p-4">
+            <p className="text-label uppercase text-accent">
+              {medals.length === 1
+                ? t("achv.newlyEarned")
+                : t("achv.newlyEarnedPlural", { count: medals.length })}
+            </p>
+            <ul className="mt-3 space-y-3">
+              {medals.map((medal) => (
+                <li key={medal.key} className="flex items-center gap-3">
+                  <Medal tier={medal.tier} size="sm" />
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-[15px] font-semibold leading-snug">
+                      {medal.name}
+                    </span>
+                    <span className="mt-0.5 block text-[13px] leading-snug text-ink-2">
+                      {medal.description}
+                    </span>
+                  </span>
+                  <span className="shrink-0 text-[13px] font-semibold tabular-nums text-accent">
+                    +{medal.points}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
 
         <div className="mb-10 mt-9 grid grid-cols-3 gap-4">
           <Stat value={String(countLoggedSets(session))} label={t("session.totalSets")} />

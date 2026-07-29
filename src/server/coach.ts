@@ -1,6 +1,9 @@
 import "server-only";
 
-import Anthropic from "@anthropic-ai/sdk";
+import { HumanMessage, SystemMessage } from "@langchain/core/messages";
+import type { BaseChatModel } from "@langchain/core/language_models/chat_models";
+import { AzureChatOpenAI, ChatOpenAI } from "@langchain/openai";
+import { z } from "zod";
 
 import { db } from "@/lib/db";
 import { parseJsonArray } from "@/lib/json";
@@ -13,95 +16,110 @@ import { getUserContext } from "./user";
  * The AI coaching layer. It reviews what the deterministic engine already
  * decided and may nudge it, but it is never the sole author of a prescription:
  *
- *   - Without ANTHROPIC_API_KEY the app runs on the engine alone.
+ *   - With no model configured the app runs on the engine alone.
  *   - Overrides are clamped to ±1 set and ±10% load around the engine's answer,
  *     so a hallucinated number cannot produce an unsafe session.
  *   - Any failure is swallowed; the engine's prescription stands.
  *
  * The value it adds is explanation and pattern-spotting across sessions —
  * things a rule table cannot express.
+ *
+ * Routed through LangChain so the provider is a deployment detail. Azure is the
+ * primary target; plain OpenAI is the fallback, and adding another provider
+ * means another branch in `createModel` and nothing else — everything below it
+ * speaks `BaseChatModel`.
  */
 
-const MODEL = "claude-opus-5";
 const MAX_SET_OVERRIDE = 1;
 const MAX_LOAD_OVERRIDE_PCT = 0.1;
+const MAX_TOKENS = 4000;
+
+/** Azure pins the model at the deployment, so there is nothing to name here. */
+const DEFAULT_AZURE_API_VERSION = "2024-10-21";
+const DEFAULT_OPENAI_MODEL = "gpt-4.1";
+
+type Provider = "azure" | "openai";
+
+/**
+ * Which provider the environment is configured for, if any. Azure wins when
+ * both are present: it is the deployment this app is built around, and a stray
+ * OPENAI_API_KEY in the environment should never silently redirect an
+ * athlete's training data to a different vendor.
+ */
+function coachProvider(): Provider | null {
+  const azure = process.env.AZURE_OPENAI_API_KEY;
+  const deployment = process.env.AZURE_OPENAI_API_DEPLOYMENT_NAME;
+  const target = process.env.AZURE_OPENAI_API_INSTANCE_NAME ?? process.env.AZURE_OPENAI_ENDPOINT;
+
+  if (azure && deployment && target) return "azure";
+  if (process.env.OPENAI_API_KEY) return "openai";
+  return null;
+}
 
 export function isCoachConfigured(): boolean {
-  return Boolean(process.env.ANTHROPIC_API_KEY);
+  return coachProvider() !== null;
 }
 
-const RESPONSE_SCHEMA = {
-  type: "object",
-  properties: {
-    summary: {
-      type: "string",
-      description: "Two sentences on how the session went and what changes next time.",
-    },
-    adjustments: {
-      type: "array",
-      description: "One entry per exercise you want to comment on. Omit exercises you agree with.",
-      items: {
-        type: "object",
-        properties: {
-          entryId: {
-            type: "string",
-            description: "The exact entryId given in the input for this exercise.",
-          },
-          note: {
-            type: "string",
-            description: "One sentence to the athlete explaining the prescription.",
-          },
-          setsDelta: {
-            type: "integer",
-            description: "Change to the algorithm's set count. Must be -1, 0, or 1.",
-          },
-          loadDeltaPct: {
-            type: "number",
-            description: "Change to the algorithm's load, as a fraction between -0.1 and 0.1.",
-          },
-        },
-        required: ["entryId", "note", "setsDelta", "loadDeltaPct"],
-        additionalProperties: false,
-      },
-    },
-  },
-  required: ["summary", "adjustments"],
-  additionalProperties: false,
-} as const;
+function createModel(): BaseChatModel | null {
+  const provider = coachProvider();
+  if (provider === null) return null;
 
-type CoachResponse = {
-  summary: string;
-  adjustments: {
-    entryId: string;
-    note: string;
-    setsDelta: number;
-    loadDeltaPct: number;
-  }[];
-};
+  // Zero temperature on purpose: this is a reviewer applying a rubric to
+  // numbers, and run-to-run variation in a training prescription is noise the
+  // athlete would have to second-guess.
+  //
+  // `maxCompletionTokens`, not `maxTokens`: the reasoning-era models reject
+  // `max_tokens` outright with a 400, and the older ones accept either. The
+  // failure was invisible except in the logs, because a coach error is
+  // swallowed by design — worth knowing before changing this back.
+  const shared = { temperature: 0, maxCompletionTokens: MAX_TOKENS, maxRetries: 2 };
 
-function parseCoachResponse(raw: string): CoachResponse | null {
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    if (!parsed || typeof parsed !== "object") return null;
-
-    const candidate = parsed as Partial<CoachResponse>;
-    if (typeof candidate.summary !== "string" || !Array.isArray(candidate.adjustments)) {
-      return null;
-    }
-
-    const adjustments = candidate.adjustments.filter(
-      (item): item is CoachResponse["adjustments"][number] =>
-        typeof item?.entryId === "string" &&
-        typeof item.note === "string" &&
-        typeof item.setsDelta === "number" &&
-        typeof item.loadDeltaPct === "number",
-    );
-
-    return { summary: candidate.summary, adjustments };
-  } catch {
-    return null;
+  if (provider === "azure") {
+    const endpoint = process.env.AZURE_OPENAI_ENDPOINT;
+    return new AzureChatOpenAI({
+      ...shared,
+      azureOpenAIApiKey: process.env.AZURE_OPENAI_API_KEY,
+      azureOpenAIApiDeploymentName: process.env.AZURE_OPENAI_API_DEPLOYMENT_NAME,
+      azureOpenAIApiVersion: process.env.AZURE_OPENAI_API_VERSION ?? DEFAULT_AZURE_API_VERSION,
+      // Either form works; the endpoint is the one Azure's portal shows.
+      ...(endpoint
+        ? { azureOpenAIEndpoint: endpoint }
+        : { azureOpenAIApiInstanceName: process.env.AZURE_OPENAI_API_INSTANCE_NAME }),
+    });
   }
+
+  return new ChatOpenAI({
+    ...shared,
+    apiKey: process.env.OPENAI_API_KEY,
+    model: process.env.OPENAI_MODEL ?? DEFAULT_OPENAI_MODEL,
+  });
 }
+
+/**
+ * Replaces a hand-written JSON schema and a hand-written parser: the same zod
+ * the server actions already validate with, handed to the provider as its
+ * response format and used to parse what comes back.
+ */
+const CoachReview = z.object({
+  summary: z.string().describe("Two sentences on how the session went and what changes next time."),
+  adjustments: z
+    .array(
+      z.object({
+        entryId: z.string().describe("The exact entryId given in the input for this exercise."),
+        note: z.string().describe("One sentence to the athlete explaining the prescription."),
+        setsDelta: z
+          .number()
+          .int()
+          .describe("Change to the algorithm's set count. Must be -1, 0, or 1."),
+        loadDeltaPct: z
+          .number()
+          .describe("Change to the algorithm's load, as a fraction between -0.1 and 0.1."),
+      }),
+    )
+    .describe("One entry per exercise you want to comment on. Omit exercises you agree with."),
+});
+
+type CoachResponse = z.infer<typeof CoachReview>;
 
 const LANGUAGE_NAME: Record<Locale, string> = {
   en: "English",
@@ -214,24 +232,19 @@ ${describePrescription(next, locale)}
 
 Review the prescription. Write the summary and all notes in ${LANGUAGE_NAME[locale]}.`;
 
-  const client = new Anthropic();
+  const model = createModel();
+  if (!model) return null;
 
-  const response = await client.messages.create({
-    model: MODEL,
-    max_tokens: 4000,
-    system: SYSTEM_PROMPT,
-    thinking: { type: "adaptive" },
-    output_config: { format: { type: "json_schema", schema: RESPONSE_SCHEMA } },
-    messages: [{ role: "user", content: prompt }],
-  });
+  const reviewer = model.withStructuredOutput(CoachReview, { name: "coach_review" });
 
-  if (response.stop_reason === "refusal") return null;
+  const parsed = await reviewer.invoke([
+    new SystemMessage(SYSTEM_PROMPT),
+    new HumanMessage(prompt),
+  ]);
 
-  const text = response.content.find((block) => block.type === "text");
-  if (!text) return null;
-
-  const parsed = parseCoachResponse(text.text);
-  if (!parsed) return null;
+  // A refusal or a malformed response throws out of `invoke`, and the caller
+  // already swallows that — the engine's prescription stands either way.
+  if (!parsed?.summary) return null;
 
   await applyCoachAdjustments(next, parsed, locale);
   return parsed.summary;
