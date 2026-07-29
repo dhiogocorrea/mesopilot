@@ -1,14 +1,17 @@
-import { readWorkbook } from "./parse-pbp";
+import { readerFor } from "./readers";
 import { guessEquipment, guessMovementType, guessMuscle } from "./guess-muscle";
 
 /** Parses without touching the database, so the mapping can be eyeballed first. */
 void (async () => {
   const path = process.argv[2]!;
+  const { family, readWorkbook } = readerFor(path);
   const blocks = await readWorkbook(path);
+
+  console.log(`layout: ${family}`);
 
   for (const block of blocks) {
     const slots = block.days.reduce((t, d) => t + d.slots.length, 0);
-    console.log(`\n=== ${block.name}  (${block.days.length} days, ${slots} slots)`);
+    console.log(`\n=== ${block.name}  (${block.days.length} days, ${slots} slots, ${block.weeks}w)`);
     for (const day of block.days) {
       console.log(`  ${day.label}`);
       for (const slot of day.slots) {

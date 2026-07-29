@@ -130,9 +130,69 @@ program" and "a sequence of programs" before choosing either was the confusion t
 collapsed.
 
 **The AI coach reviews, it doesn't decide.** `src/server/coach.ts` runs *after* the
-deterministic engine and its overrides are clamped to ±1 set and ±10% load. Without
-`ANTHROPIC_API_KEY` the app is fully functional on the engine alone, and any coach
-failure is swallowed so it can never lose logged work. Keep it that way.
+deterministic engine and its overrides are clamped to ±1 set and ±10% load. With no model
+configured the app is fully functional on the engine alone, and any coach failure is
+swallowed so it can never lose logged work. Keep it that way.
+
+The provider is reached through LangChain and chosen in `createModel`: Azure OpenAI when
+its variables are complete, plain OpenAI otherwise, null when neither is. Azure wins when
+both are present — a stray `OPENAI_API_KEY` must never silently redirect an athlete's
+data to another vendor. Everything below `createModel` speaks `BaseChatModel`, and the
+response shape is the same zod schema the app validates with elsewhere, handed to
+`withStructuredOutput` — don't reintroduce a hand-written JSON schema or a hand-written
+parser.
+
+## Achievements
+
+`src/lib/achievements/` is pure and tested, like the progression engine: the catalogue
+is a code constant and `evaluate()` turns numbers into awards with no I/O. Only the
+*unlock* is a database row, because only the unlock is per-athlete.
+
+Three rules the tests enforce, and one they cannot:
+
+- **Keys are permanent.** They are written into `UserAchievement` rows; renaming one
+  orphans every medal already earned.
+- **Points are snapshotted onto the row at unlock.** A leaderboard is then
+  `sum(points) group by userId` — one aggregate rather than loading every unlock and
+  re-scoring it — and re-pricing a medal never rewrites what someone already has.
+- **Every tier crossed is awarded at once**, not just the next one. A single huge
+  session, or an imported history, can legitimately clear two, and dropping the lower
+  one leaves a hole nothing ever fills.
+
+`awardAchievements` swallows its own failures for the same reason the coach does: it
+runs *after* the session is saved, and a medal arriving late is a non-event next to a
+session that failed to save. It is called at the end of `finishSession`, after
+`applyProgression` has had its chance to complete the block, so "finish a block" can
+fire on the session that finished it. Newly earned keys ride to the summary screen in
+the query string, and the page re-checks each one against what the athlete actually
+holds — a hand-edited URL shows nothing.
+
+## Friends
+
+`src/server/friends.ts` is the whole read side; `friend-actions.ts` is the write side.
+
+**What a friend can see is deliberately narrow, and the narrowness is the feature.**
+Completed sessions and unlocked medals — nothing from `Profile`. Bodyweight, injuries,
+sleep, stress, nutrition and caloric state are health data that happens to live in the
+same database, and none of it is part of "see their progress". Every query in that file
+uses an explicit `select` of `{ id, username, name }` for other people; never widen it
+to `include: { profile: true }` for convenience.
+
+Consent is mutual and explicit. A `Friendship` row does nothing until `status` is
+`"accepted"`, so nobody's history becomes visible by someone else's action alone. One
+row holds the pair with whoever asked first, which means **every read has to look in
+both directions** — `acceptedEdges` is the only place that resolves that, and everything
+else goes through it.
+
+A declined row is kept rather than deleted, and the unique constraint on
+`(requesterId, addresseeId)` is what then stops the same person asking again. Deleting
+it would turn "no" into a button someone can press daily. Removing a friend *does*
+delete the row, because that is not a "no" that needs remembering.
+
+The feed is derived from the training data, not written to an events table: nothing to
+backfill, nothing to keep in sync, and a session that is edited or deleted stops being
+in the feed because it stops being true. Two reads merged in memory beats an append-only
+log that can disagree with the sessions it describes.
 
 ## Visual system
 
@@ -175,13 +235,55 @@ Renaissance Periodization people whose method it implements.
 Numbers are the hero: `tabular-nums` is on globally so figures don't reflow mid-set,
 and the `text-display` / `Stat` sizes are tuned for figures rather than prose.
 
+## Exercise names in two languages
+
+Seeded exercises are translated by hand in `prisma/seed-data.ts`. *Imported* ones arrive
+with only an English name, and the importer used to copy it into `namePt` — which left a
+Portuguese athlete reading a library half in English.
+
+`src/lib/i18n/exercise-names.ts` composes the Portuguese instead of listing it: gym names
+are `[modifiers] [equipment] [movement]`, so a vocabulary of each is reassembled in
+Portuguese word order. Two rules make the output read like Portuguese rather than
+translated English:
+
+- Adjectives **agree with the head noun's gender** — *Remada sentad**a*** but *Supino
+  sentad**o***, from the same English word.
+- Bare adjectives hug the noun, prepositional phrases trail: *Rosca alternada com
+  halteres*, never *Rosca com halteres alternada*.
+
+It returns `null` when any part of the name is not vocabulary — a half-translated name is
+worse than an English one. `npm run translate:exercises` fills in anything still
+untranslated (`--write` to apply, dry run by default) and only touches rows where
+`namePt` still equals `nameEn`, so a name the athlete edited is never overwritten.
+
+Growing the vocabulary is the way to cover a new program; the override map is for names
+that genuinely do not decompose.
+
 ## Importing purchased programs
 
-`scripts/import-programs.ts` reads Pure Bodybuilding Program `.xlsx` files into the
-local database as custom programs. **Their contents must never end up in this repo** —
-it is a paid product, so importing the athlete's own copy is fine and committing it to
-source control is redistribution. That is the whole reason this is an importer and not
-a seed; don't "helpfully" move the output into `prisma/`.
+`scripts/import-programs.ts` reads published `.xlsx` programs into the database.
+`scripts/readers.ts` picks the parser and the naming from the filename — `parse-pbp.ts`
+for Pure Bodybuilding, `parse-minmax.ts` for Min-Max. They share the cell helpers
+(`unmangle`, `cell`, `hyperlink`) and the `PbpBlock` output shape, but not the row
+walker: Min-Max puts every column one to the right, marks blocks with `Block n` rows
+inside a single sheet, and repeats each block for six `Week n` sections. **Only the
+first week of a Min-Max block is read** — within a block the sets, reps, rest and
+exercise selection never change, only the RIR targets, and RIR is the one thing this
+app's engine ramps for itself. A new publisher means a new parser plus a branch in
+`readerFor`, not conditionals threaded through an existing walker. **Their contents must never end up in this repo** — it is a paid product, and
+committing it to source control is a different act from serving it off a deployment.
+That is the whole reason this is an importer and not a seed; don't "helpfully" move the
+output into `prisma/`.
+
+`--shared` writes the programs, tracks and their exercises as platform content
+(`isCustom: false, userId: null`) instead of one athlete's library, so every account
+sees them. Whether a given workbook may be published that way is a licensing question
+for whoever runs the deployment, not something the script can decide — the flag exists
+so the answer is at least deliberate. Re-running with it **promotes** rows imported
+privately before rather than duplicating them, which is why the template and track
+lookups drop the `userId` filter in shared mode. Exercises get promoted too: a shared
+program built out of one athlete's private exercises would be visible to everyone and
+readable by nobody.
 
 Two traps the parser exists to handle, both worth knowing if you touch it:
 

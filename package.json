@@ -16,10 +16,12 @@
     "db:reset": "prisma migrate reset --force",
     "db:studio": "prisma studio",
     "postinstall": "prisma generate",
-    "db:deploy": "prisma migrate deploy"
+    "db:deploy": "prisma migrate deploy",
+    "translate:exercises": "tsx scripts/translate-exercises.ts"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.115.0",
+    "@langchain/core": "^1.2.3",
+    "@langchain/openai": "^1.5.5",
     "@prisma/adapter-pg": "^7.9.1",
     "@prisma/client": "^7.9.0",
     "next": "16.2.12",

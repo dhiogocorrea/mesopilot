@@ -53,7 +53,7 @@ export type PbpBlock = { name: string; weeks: number; days: PbpDay[] };
  * original range, so the damage is fully reversible — and every date in these
  * columns is a mangled range, since neither column can legitimately hold one.
  */
-function unmangle(value: unknown): string | null {
+export function unmangle(value: unknown): string | null {
   if (value instanceof Date) return `${value.getMonth() + 1}-${value.getDate()}`;
   if (typeof value === "number") return String(value);
   if (typeof value === "string") return value.trim() || null;
@@ -71,7 +71,7 @@ function unmangle(value: unknown): string | null {
   return null;
 }
 
-function cell(row: ExcelJS.Row, column: number): string | null {
+export function cell(row: ExcelJS.Row, column: number): string | null {
   return unmangle(row.getCell(column).value);
 }
 
@@ -80,7 +80,7 @@ function cell(row: ExcelJS.Row, column: number): string | null {
  * exact movement — better provenance than anything this app could infer, so it
  * is carried across as the exercise's demo.
  */
-function hyperlink(row: ExcelJS.Row, column: number): string | null {
+export function hyperlink(row: ExcelJS.Row, column: number): string | null {
   const value = row.getCell(column).value as unknown;
   if (value && typeof value === "object" && "hyperlink" in value) {
     const url = (value as { hyperlink: unknown }).hyperlink;

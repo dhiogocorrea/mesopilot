@@ -37,13 +37,74 @@ model User {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  profile    Profile?
-  landmarks  UserMuscleLandmark[]
-  mesocycles Mesocycle[]
-  exercises  Exercise[]
-  templates  ProgramTemplate[]
-  tracks     ProgramTrack[]
-  sessions   AuthSession[]
+  profile      Profile?
+  landmarks    UserMuscleLandmark[]
+  mesocycles   Mesocycle[]
+  exercises    Exercise[]
+  templates    ProgramTemplate[]
+  tracks       ProgramTrack[]
+  sessions     AuthSession[]
+  achievements UserAchievement[]
+
+  friendRequestsSent     Friendship[] @relation("FriendshipRequester")
+  friendRequestsReceived Friendship[] @relation("FriendshipAddressee")
+}
+
+/// A connection between two athletes, and the consent behind it.
+///
+/// One row per pair, holding whoever asked first — so every read has to look in
+/// both directions (`src/server/friends.ts` does). Nobody sees anything of
+/// anyone else's until `status` is "accepted": training history is health-
+/// adjacent, and a one-sided follow would make it visible without agreement.
+model Friendship {
+  id String @id @default(cuid())
+
+  requesterId String
+  requester   User   @relation("FriendshipRequester", fields: [requesterId], references: [id], onDelete: Cascade)
+
+  addresseeId String
+  addressee   User   @relation("FriendshipAddressee", fields: [addresseeId], references: [id], onDelete: Cascade)
+
+  /// FriendshipStatus: "pending" | "accepted" | "declined".
+  ///
+  /// A declined row is kept rather than deleted, and the unique constraint
+  /// below then stops the same person asking again — deleting it would turn
+  /// "no" into a button someone can press once a day.
+  status String @default("pending")
+
+  createdAt   DateTime  @default(now())
+  respondedAt DateTime?
+
+  @@unique([requesterId, addresseeId])
+  @@index([addresseeId, status])
+  @@index([requesterId, status])
+}
+
+/// One unlocked medal. The catalogue itself lives in code
+/// (`src/lib/achievements/catalogue.ts`) — only the unlock is a row, because
+/// only the unlock is per-athlete and only it needs a timestamp.
+model UserAchievement {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// Matches a key in the code catalogue.
+  key String
+
+  /// Snapshotted from the catalogue rather than read through it. A leaderboard
+  /// is then `sum(points) group by userId` — one aggregate instead of loading
+  /// every unlock and scoring it in JS — and re-pricing a medal later cannot
+  /// silently rewrite what people already earned.
+  points Int
+
+  /// What the athlete had reached when it fired: 10 sessions, 25000 kg. Kept
+  /// so the medal can state the achievement rather than just name it.
+  value Int
+
+  unlockedAt DateTime @default(now())
+
+  @@unique([userId, key])
+  @@index([userId])
 }
 
 /// A logged-in browser. Named for what it is rather than `Session`, which this

@@ -6,23 +6,29 @@ import { basename, extname, join } from "node:path";
 import { PrismaPg } from "@prisma/adapter-pg";
 
 import { PrismaClient } from "../src/generated/prisma/client";
+import { toPortuguese } from "../src/lib/i18n/exercise-names";
 import { estimateProgramMinutes } from "../src/lib/training-time";
 import { guessEquipment, guessMovementType, guessMuscle } from "./guess-muscle";
-import { readWorkbook, type PbpBlock } from "./parse-pbp";
+import type { PbpBlock } from "./parse-pbp";
+import { readerFor, type Reader } from "./readers";
 
 /**
- * Imports Pure Bodybuilding Program spreadsheets into the local database as
- * custom programs.
+ * Imports Pure Bodybuilding Program spreadsheets into the database.
  *
- *   npm run import:programs -- "D:/Documentos/workout"
+ *   npm run import:programs -- "D:/Documentos/workout" [username] [--shared]
+ *
+ * Without `--shared` the programs belong to one athlete and nobody else sees
+ * them. With it they join the seeded library and every account gets them — see
+ * `Visibility` below for what that means beyond the two columns it writes.
  *
  * The source files stay wherever they are — nothing is copied into the repo.
- * This is a paid program: importing your own copy for your own use is fine,
- * committing its contents to source control and shipping them is not, which is
- * exactly why this is an importer and not a seed.
+ * This is a paid program: committing its contents to source control is a
+ * different act from serving them off your own deployment, and it is the one
+ * this script exists to avoid. Keep it an importer, not a seed.
  *
  * Re-running is safe: programs are matched by name and rebuilt in place, and
- * exercises are matched before being created.
+ * exercises are matched before being created. Re-running with `--shared`
+ * promotes rows that were imported privately rather than duplicating them.
  */
 
 function requireDatabaseUrl(): string {
@@ -45,21 +51,29 @@ function normalize(value: string): string {
     .trim();
 }
 
-/** "Pure_Bodybuilding_-_PPL.xlsx" → { phase: 1, split: "PPL" } */
-function describeFile(fileName: string): { phase: number; split: string } {
-  const phase = /phase\s*2/i.test(fileName) ? 2 : 1;
-  const lower = fileName.toLowerCase();
-  const split = /ppl|push.?pull/.test(lower)
-    ? "PPL"
-    : /upper.?lower/.test(lower)
-      ? "Upper / Lower"
-      : /full.?body/.test(lower)
-        ? "Full Body"
-        : basename(fileName, extname(fileName));
-  return { phase, split };
-}
+type Stats = { matched: number; created: string[]; demosUpgraded: number; promoted: number };
 
-type Stats = { matched: number; created: string[]; demosUpgraded: number };
+/**
+ * Who the imported content belongs to.
+ *
+ * `owned` is the default and the cautious one: the programs land in the
+ * importing athlete's library and nobody else can see them. A workbook is
+ * usually a paid product, and one person's licence is not everyone's.
+ *
+ * `shared` publishes them to every account on the deployment, alongside the
+ * seeded library. That is a licensing decision, not a technical one — whoever
+ * runs the deployment has to be entitled to distribute what they are about to
+ * import. The contents still never enter the repository either way; this stays
+ * an importer precisely so a paid program is not committed to source control.
+ */
+type Visibility = "owned" | "shared";
+
+/** The two columns that decide who can see a row, for whichever mode is set. */
+function ownership(visibility: Visibility, userId: string) {
+  return visibility === "shared"
+    ? { isCustom: false, userId: null }
+    : { isCustom: true, userId };
+}
 
 /**
  * How many weeks one pass through the workbook's sessions takes.
@@ -84,6 +98,7 @@ async function resolveExercise(
   repMax: number,
   demoUrl: string | null,
   userId: string,
+  visibility: Visibility,
   index: Map<string, string>,
   muscleIds: Map<string, string>,
   stats: Stats,
@@ -92,6 +107,20 @@ async function resolveExercise(
   const existing = index.get(key);
   if (existing) {
     stats.matched += 1;
+
+    // A shared program cannot be built out of one athlete's private exercises:
+    // everyone would see the track and nobody else could read what is in it.
+    // Promoting in place keeps the id, so blocks already generated from it
+    // keep working.
+    if (visibility === "shared") {
+      stats.promoted += (
+        await prisma.exercise.updateMany({
+          where: { id: existing, isCustom: true },
+          data: { isCustom: false, userId: null },
+        })
+      ).count;
+    }
+
     // The author's own demo for this exact movement beats a link this app
     // inferred from a search title — but never an athlete's own choice.
     if (demoUrl) {
@@ -110,8 +139,10 @@ async function resolveExercise(
   const created = await prisma.exercise.create({
     data: {
       nameEn: name,
-      // Imported names have no translation; the athlete can rename either.
-      namePt: name,
+      // Composed from the gym vocabulary where it can be; falls back to the
+      // English name, which `npm run translate:exercises` can pick up later
+      // once the vocabulary grows. Either way the athlete can rename it.
+      namePt: toPortuguese(name) ?? name,
       muscleGroupId,
       equipment: guessEquipment(name),
       movementType: guessMovementType(name),
@@ -120,8 +151,7 @@ async function resolveExercise(
       defaultRestSec: restSec,
       demoUrl,
       demoSource: demoUrl ? "program" : null,
-      isCustom: true,
-      userId,
+      ...ownership(visibility, userId),
     },
   });
 
@@ -132,13 +162,14 @@ async function resolveExercise(
 
 async function importBlock(
   block: PbpBlock,
-  label: string,
+  reader: Reader,
   userId: string,
+  visibility: Visibility,
   index: Map<string, string>,
   muscleIds: Map<string, string>,
   stats: Stats,
 ): Promise<string> {
-  const name = `${label} · ${block.name || "Block"}`;
+  const name = `${reader.blockLabel} · ${block.name || "Block"}`;
 
   const timed = block.days.map((day) =>
     day.slots.map((slot) => ({ sets: slot.workingSets, restSec: slot.restSec })),
@@ -148,11 +179,13 @@ async function importBlock(
   const daysPerWeek = Math.ceil(block.days.length / weeksPerRotation);
 
   const description = [
-    `Imported from your own copy of the Pure Bodybuilding Program.`,
+    `Imported from ${reader.programName}.`,
     weeksPerRotation > 1
       ? `${block.days.length} sessions per rotation, ${daysPerWeek} a week over ${weeksPerRotation} weeks.`
       : `${block.days.length} sessions per rotation.`,
-    `Weeks 1–4 run this prescription; the last week is a deload.`,
+    // True of both layouts: the source varies effort week to week and holds
+    // everything else fixed, which is the part this app generates itself.
+    `Every week runs this prescription; effort ramps and the last week is a deload.`,
   ].join(" ");
 
   const fields = {
@@ -165,10 +198,9 @@ async function importBlock(
     level: "advanced",
     goal: "hypertrophy",
     estimatedMinutes: estimateProgramMinutes(timed),
-    isCustom: true,
+    ...ownership(visibility, userId),
     // Theirs to edit, but not written by them — see ProgramTemplate.source.
     source: "import",
-    userId,
   };
 
   // Resolved before the transaction opens. SQLite holds a single write lock, so
@@ -188,6 +220,7 @@ async function importBlock(
           slot.repMax,
           slot.demoUrl,
           userId,
+          visibility,
           index,
           muscleIds,
           stats,
@@ -206,8 +239,10 @@ async function importBlock(
   );
 
   const templateId = await prisma.$transaction(async (tx) => {
+    // Matched on name alone in shared mode: a row imported privately before
+    // must be found so it is promoted in place, not duplicated beside itself.
     const existing = await tx.programTemplate.findFirst({
-      where: { userId, isCustom: true, nameEn: name },
+      where: visibility === "shared" ? { nameEn: name } : { userId, isCustom: true, nameEn: name },
       select: { id: true },
     });
 
@@ -262,38 +297,50 @@ async function importBlock(
   return templateId;
 }
 
-type ImportedBlock = { split: string; phase: number; order: number; templateId: string };
+type ImportedBlock = {
+  trackKey: string;
+  trackName: string;
+  phase: number;
+  order: number;
+  templateId: string;
+  weeks: number;
+};
 
 /**
  * A published program is usually several blocks meant to be run back to back.
  * They arrive here as separate templates, so they are stitched into one track
  * per split, ordered by phase and then by their position in the workbook.
  */
-async function buildTracks(imported: ImportedBlock[], userId: string): Promise<void> {
-  const bySplit = new Map<string, ImportedBlock[]>();
+async function buildTracks(
+  imported: ImportedBlock[],
+  userId: string,
+  visibility: Visibility,
+): Promise<void> {
+  const byTrack = new Map<string, ImportedBlock[]>();
   for (const block of imported) {
-    bySplit.set(block.split, [...(bySplit.get(block.split) ?? []), block]);
+    byTrack.set(block.trackKey, [...(byTrack.get(block.trackKey) ?? []), block]);
   }
 
   console.log("Tracks:");
-  for (const [split, blocks] of bySplit) {
+  for (const blocks of byTrack.values()) {
     const ordered = [...blocks].sort((a, b) => a.phase - b.phase || a.order - b.order);
-    const name = `Pure Bodybuilding · ${split}`;
-    const description = `${ordered.length} blocks back to back, roughly ${ordered.length * 5} weeks.`;
+    const name = ordered[0]!.trackName;
+    // Summed rather than assumed: PBP blocks run five weeks, Min-Max six.
+    const weeks = ordered.reduce((total, block) => total + block.weeks, 0);
+    const description = `${ordered.length} blocks back to back, ${weeks} weeks in total.`;
 
     const fields = {
       nameEn: name,
       namePt: name,
       descEn: description,
       descPt: description,
-      isCustom: true,
+      ...ownership(visibility, userId),
       source: "import",
-      userId,
     };
 
     await prisma.$transaction(async (tx) => {
       const existing = await tx.programTrack.findFirst({
-        where: { userId, isCustom: true, nameEn: name },
+        where: visibility === "shared" ? { nameEn: name } : { userId, isCustom: true, nameEn: name },
         select: { id: true },
       });
 
@@ -341,16 +388,22 @@ async function resolveUser(username?: string): Promise<{ id: string; name: strin
 }
 
 async function main(): Promise<void> {
-  const root = process.argv[2];
+  const args = process.argv.slice(2);
+  const visibility: Visibility = args.includes("--shared") ? "shared" : "owned";
+  const [root, username] = args.filter((arg) => !arg.startsWith("--"));
+
   if (!root) {
     console.error(
-      'Usage: npm run import:programs -- "<folder containing the .xlsx files>" [username]',
+      'Usage: npm run import:programs -- "<folder with the .xlsx files>" [username] [--shared]',
     );
+    console.error("  --shared  publish to every account instead of the importer's own library");
     process.exitCode = 1;
     return;
   }
 
-  const user = await resolveUser(process.argv[3]);
+  // Still resolved in shared mode: the rows end up owned by nobody, but the run
+  // has to be attributable to someone who actually holds the files.
+  const user = await resolveUser(username);
 
   const muscles = await prisma.muscleGroup.findMany({ select: { id: true, key: true } });
   const muscleIds = new Map(muscles.map((muscle) => [muscle.key, muscle.id]));
@@ -365,7 +418,7 @@ async function main(): Promise<void> {
     index.set(normalize(exercise.namePt), exercise.id);
   }
 
-  const stats: Stats = { matched: 0, created: [], demosUpgraded: 0 };
+  const stats: Stats = { matched: 0, created: [], demosUpgraded: 0, promoted: 0 };
   const files = await collectWorkbooks(root);
 
   if (files.length === 0) {
@@ -374,36 +427,51 @@ async function main(): Promise<void> {
     return;
   }
 
-  console.log(`Importing ${files.length} workbook(s) for ${user.name}…\n`);
+  console.log(
+    visibility === "shared"
+      ? `Importing ${files.length} workbook(s) as shared platform content…\n`
+      : `Importing ${files.length} workbook(s) for ${user.name}…\n`,
+  );
 
   const imported: ImportedBlock[] = [];
 
   for (const file of files) {
-    const { phase, split } = describeFile(basename(file));
-    const blocks = await readWorkbook(file);
-    console.log(`${basename(file)}  →  ${blocks.length} block(s)`);
+    const reader = readerFor(file);
+    const blocks = await reader.readWorkbook(file);
+    console.log(`${basename(file)}  →  ${blocks.length} block(s) [${reader.family}]`);
 
     for (const [order, block] of blocks.entries()) {
       const templateId = await importBlock(
         block,
-        `PBP P${phase} · ${split}`,
+        reader,
         user.id,
+        visibility,
         index,
         muscleIds,
         stats,
       );
-      imported.push({ split, phase, order, templateId });
+      imported.push({
+        trackKey: reader.trackKey,
+        trackName: reader.trackName,
+        phase: reader.phase,
+        order,
+        templateId,
+        weeks: block.weeks,
+      });
     }
     console.log();
   }
 
-  await buildTracks(imported, user.id);
+  await buildTracks(imported, user.id, visibility);
   console.log();
 
   console.log(
     `Exercises: ${stats.matched} matched, ${stats.created.length} created, ` +
       `${stats.demosUpgraded} existing demos replaced with the program author's own.`,
   );
+  if (stats.promoted > 0) {
+    console.log(`Promoted ${stats.promoted} private exercise(s) to shared.`);
+  }
   if (stats.created.length > 0) {
     console.log(`\nCreated (muscle group is a guess; "?" means it fell back to the day name):`);
     for (const line of stats.created.sort()) console.log(`   ${line}`);

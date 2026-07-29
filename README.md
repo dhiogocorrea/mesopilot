@@ -38,15 +38,20 @@ reasoning behind it.
 
 ## The AI layer
 
-With an `ANTHROPIC_API_KEY`, Claude reviews each completed session against the engine's
-output and your training history, writes a short note per exercise, and can nudge the
+With a model configured, it reviews each completed session against the engine's output
+and your training history, writes a short note per exercise, and can nudge the
 prescription. It is a reviewer, not the author: overrides are clamped to ±1 set and ±10%
-load, and if the API is unavailable the deterministic engine's answer stands. **The app
-is fully functional without a key.**
+load, and if the model is unavailable the deterministic engine's answer stands. **The app
+is fully functional without it.**
+
+The provider goes through LangChain, so it is a deployment detail rather than something
+the training code knows about. **Azure OpenAI is the primary target**; plain OpenAI is
+the fallback when the Azure variables are incomplete. Adding another provider is one
+branch in `createModel` and nothing else.
 
 ## Stack
 
-Next.js 16 (App Router, React 19) · Prisma 7 + PostgreSQL · Tailwind 4 · Anthropic SDK.
+Next.js 16 (App Router, React 19) · Prisma 7 + PostgreSQL · Tailwind 4 · LangChain.
 English and Brazilian Portuguese throughout, including the exercise library.
 
 ## Accounts
@@ -138,6 +143,38 @@ the names of the blocks inside, and ignores accents, so `forca` finds *Força Mi
 Session lengths are computed from each block's own prescribed sets and rest periods
 rather than assigned by hand, so they stay honest if the content changes.
 
+## Achievements
+
+Finishing sessions earns medals and points. Twenty-two of them across six metrics —
+sessions completed, blocks completed, blocks with nothing skipped, total tonnage, the
+weekly training streak, and how many different exercises you have logged — in four
+tiers worth 10, 25, 50 and 100 points.
+
+New medals appear on the session summary, right where you finished the work. The full
+list lives under Progress → All achievements, with the locked ones sorted by how close
+you are rather than alphabetically, so the top of that list is what you could earn next.
+
+The streak counts back from your most recent session rather than from today, so it does
+not evaporate mid-week — it breaks only once a whole Monday-to-Sunday week passes with
+nothing logged.
+
+Points are snapshotted onto each unlock, which keeps a future leaderboard to a single
+`sum(points)` and means re-pricing a medal never changes what anyone already earned.
+
+## Friends
+
+Add someone by their exact username — there is no directory to browse — and they have to
+accept before either of you sees anything. Once connected, the Friends screen shows a
+feed of their finished sessions and the medals they earn, plus a list of everyone with
+their points, sessions and current streak.
+
+**Your health profile is never shared.** Bodyweight, injuries, sleep, stress, nutrition
+and caloric state stay yours; friends see training activity and nothing else. The screen
+says so where you add people, so you know what you are agreeing to before you agree.
+
+Either of you can end a friendship, and both stop seeing each other immediately. A
+declined request stays declined — the person who asked cannot simply ask again.
+
 ## Form demonstrations
 
 Every exercise has a demo control, in the library and on each card in the session logger.
@@ -173,16 +210,24 @@ redistributing anything. If you licence a media set, `demoUrl` takes those URLs 
 ## Importing a program you own
 
 If you have a training program as a spreadsheet, `npm run import:programs -- "<folder>"`
-reads it into your database as custom programs. It currently understands the Pure
-Bodybuilding Program layout.
+reads it into your database. It currently understands two layouts, chosen by filename:
+the Pure Bodybuilding Program and the Min-Max Program.
 
 ```bash
-npm run import:dry-run -- "path/to/Program.xlsx"   # parse and print, no writes
-npm run import:programs -- "path/to/folder"        # import for real
+npm run import:dry-run -- "path/to/Program.xlsx"            # parse and print, no writes
+npm run import:programs -- "path/to/folder" alice           # into alice's library
+npm run import:programs -- "path/to/folder" alice --shared  # onto the platform
 ```
 
+By default the programs belong to one account and nobody else can see them. `--shared`
+publishes them beside the seeded library so every account gets them, promoting the
+exercises they use along the way. Whether a given program may be shared that way is a
+licensing question about your copy, not something the importer can answer — the flag is
+there so the choice is deliberate rather than a side effect.
+
 Re-running is safe: programs are matched by name and rebuilt, exercises are matched
-before being created, and a demo link you chose yourself is never overwritten.
+before being created, and a demo link you chose yourself is never overwritten. Re-running
+with `--shared` promotes what was imported privately instead of duplicating it.
 
 Published programs usually come as several blocks meant to be run back to back, so the
 importer also stitches them into a track per split — build, then novelty, then the
@@ -212,11 +257,18 @@ sessions copy their own prescriptions when the block is created.
 
 ### Optional: enable the AI coach
 
-Add your key to `.env`:
+Azure needs three things in `.env` — the key, the **deployment** name (Azure pins the
+model to the deployment, so there is no model name to set), and the endpoint:
 
 ```
-ANTHROPIC_API_KEY=sk-ant-...
+AZURE_OPENAI_API_KEY=...
+AZURE_OPENAI_API_DEPLOYMENT_NAME=your-deployment
+AZURE_OPENAI_ENDPOINT=https://your-resource.openai.azure.com/
 ```
+
+`AZURE_OPENAI_API_INSTANCE_NAME` works instead of the endpoint, and
+`AZURE_OPENAI_API_VERSION` overrides the default. Set `OPENAI_API_KEY` instead to use
+plain OpenAI. Leave all of it blank and the engine runs alone.
 
 ### Deploying
 
