@@ -1,4 +1,5 @@
 import { Avatar } from "@/components/avatar";
+import { ResetTrainingButton } from "@/components/reset-training-button";
 import { SettingsForm } from "@/components/settings-form";
 import { SignOutButton } from "@/components/sign-out-button";
 import { VerifyEmailButton } from "@/components/verify-email-button";
@@ -102,6 +103,13 @@ export default async function SettingsPage() {
           <div className="mt-5">
             <SignOutButton />
           </div>
+        </Section>
+
+        <Section label={t("settings.data")}>
+          <p className="mb-4 text-[13px] leading-relaxed text-ink-3">
+            {t("settings.resetDataBody")}
+          </p>
+          <ResetTrainingButton />
         </Section>
 
         <Section label={t("settings.about")}>

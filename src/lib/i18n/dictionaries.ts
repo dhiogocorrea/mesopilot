@@ -376,6 +376,9 @@ export const en = {
   "settings.aiCoachBody":
     "With a model configured, it reviews each session and explains its adjustments. Without one, the built-in algorithm handles everything.",
   "settings.data": "Data",
+  "settings.resetData": "Reset training data",
+  "settings.resetDataBody": "Deletes all blocks, sessions, sets, achievements, and custom programs. Your account, profile, and exercises are kept.",
+  "settings.resetDataConfirm": "This is permanent and cannot be undone. Delete everything?",
   "settings.about": "About",
   "settings.account": "Account",
   "settings.signedInAs": "Signed in as {username}",
@@ -862,6 +865,9 @@ export const pt: Dictionary = {
   "settings.aiCoachBody":
     "Com um modelo configurado, ele analisa cada treino e explica os ajustes. Sem ele, o algoritmo interno cuida de tudo.",
   "settings.data": "Dados",
+  "settings.resetData": "Apagar dados de treino",
+  "settings.resetDataBody": "Exclui todos os blocos, sessões, séries, conquistas e programas personalizados. Sua conta, perfil e exercícios são mantidos.",
+  "settings.resetDataConfirm": "Isso é permanente e não pode ser desfeito. Excluir tudo?",
   "settings.about": "Sobre",
   "settings.account": "Conta",
   "settings.signedInAs": "Conectado como {username}",

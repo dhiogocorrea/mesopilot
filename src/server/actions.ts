@@ -900,3 +900,31 @@ export async function archiveExercise(exerciseId: string): Promise<void> {
   revalidatePath("/exercises");
 }
 
+// ------------------------------------------------------------------ danger zone
+
+/**
+ * Wipes all training history for the current user: every mesocycle (and the
+ * sessions / sets / feedback that cascade from it), personal volume landmarks,
+ * achievements, and custom programs / tracks. The account, profile, exercises,
+ * auth sessions, and friends are kept.
+ */
+export async function resetTrainingData(): Promise<void> {
+  const { userId } = await getUserContext();
+
+  await db.$transaction([
+    // Mesocycles cascade-delete Sessions → SessionExercises → SetLogs,
+    // SessionMuscleFeedback and SessionExercisePlan rows.
+    db.mesocycle.deleteMany({ where: { userId } }),
+    // Per-user volume calibration learned from the deleted sessions.
+    db.userMuscleLandmark.deleteMany({ where: { userId } }),
+    // Medals that were awarded for the deleted history.
+    db.userAchievement.deleteMany({ where: { userId } }),
+    // Custom programs & tracks the athlete created themselves.
+    db.programTemplate.deleteMany({ where: { userId, isCustom: true } }),
+    db.programTrack.deleteMany({ where: { userId, isCustom: true } }),
+  ]);
+
+  revalidatePath("/", "layout");
+  redirect("/");
+}
+
