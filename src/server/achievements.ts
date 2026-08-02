@@ -123,6 +123,15 @@ async function perfectBlockCount(userId: string): Promise<number> {
 /**
  * Evaluates and persists. Returns only what was *newly* earned, so the caller
  * can show it — an empty array is the normal case.
+ *
+ * **This only ever adds.** A session can be reopened, corrected and finished
+ * again (`reopenSession`), which re-runs this over the new numbers — but a
+ * medal already held is never taken back, even if the corrected figures no
+ * longer reach it. An unlock row records that it happened, and editing history
+ * does not un-happen it. The alternative punishes the athlete for fixing a
+ * typo, which is the one thing that would teach them not to. It also makes the
+ * write idempotent, so re-finishing costs nothing: `skipDuplicates` and the
+ * unique constraint on (userId, key) do the rest.
  */
 export async function awardAchievements(
   userId: string,

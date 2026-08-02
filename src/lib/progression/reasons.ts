@@ -26,6 +26,7 @@ export const REASON_CODES = [
   "load_hold",
   "no_history",
   "no_feedback",
+  "skipped_last_week",
 ] as const;
 
 export type ReasonCode = (typeof REASON_CODES)[number];
@@ -117,6 +118,10 @@ const TEXT: Record<ReasonCode, Record<Locale, string>> = {
   no_feedback: {
     en: "No feedback was recorded, so the prescription stays as it was.",
     pt: "Nenhum feedback foi registrado, então a prescrição continua a mesma.",
+  },
+  skipped_last_week: {
+    en: "You skipped this last time, so it comes back unchanged.",
+    pt: "Você pulou este da última vez, então ele volta sem mudanças.",
   },
 };
 

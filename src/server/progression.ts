@@ -2,7 +2,13 @@ import "server-only";
 
 import { db } from "@/lib/db";
 import { renderReasons } from "@/lib/progression/reasons";
-import { isDeloadWeek, prescribe, type PerformedSet } from "@/lib/progression/engine";
+import {
+  isDeloadWeek,
+  prescribe,
+  rirForWeek,
+  type PerformedSet,
+  type Prescription,
+} from "@/lib/progression/engine";
 import { isLowerBody } from "@/lib/muscles";
 import type { MovementType, PartialFeedback, WeightUnit } from "@/lib/types";
 import { getLandmarks } from "./user";
@@ -32,6 +38,13 @@ export type ProgressionSummary = {
   }[];
 };
 
+/**
+ * A muscle nobody rated. Left empty rather than filled with mild values: the
+ * engine treats an absent field as "no signal" and falls back to the RIR ramp,
+ * which is what should happen when the question went unanswered.
+ */
+const UNANSWERED: PartialFeedback = {};
+
 export async function applyProgression(
   sessionId: string,
   unit: WeightUnit,
@@ -53,6 +66,7 @@ export async function applyProgression(
           sets: { orderBy: { order: "asc" } },
         },
       },
+      feedback: true,
     },
   });
 
@@ -76,11 +90,30 @@ export async function applyProgression(
 
   const adjustments: ProgressionSummary["adjustments"] = [];
 
+  // Feedback is answered once per muscle group, so every exercise that trains a
+  // muscle is prescribed from that muscle's one answer. Two chest movements
+  // reading the same recovery is the point: they compete for the same budget.
+  const feedbackByMuscle = new Map<string, PartialFeedback>(
+    session.feedback.map((row) => [
+      row.muscleGroupId,
+      {
+        soreness: row.soreness as PartialFeedback["soreness"],
+        pump: row.pump as PartialFeedback["pump"],
+        workload: row.workload as PartialFeedback["workload"],
+        jointPain: row.jointPain as PartialFeedback["jointPain"],
+      },
+    ]),
+  );
+
   // The engine is pure, so every prescription is computed before the
   // transaction opens. What is left inside it is three bulk writes rather than
   // three round-trips per exercise — the difference between comfortably inside
   // Prisma's 5s transaction window and overrunning it on a hosted database.
-  const prescriptions = session.entries.map((entry) => {
+  // An exercise added for today only stops here — the plan never had it, so the
+  // week generated from this one does not inherit it.
+  const carried = session.entries.filter((entry) => entry.plan !== "extra");
+
+  const prescriptions = carried.map((entry) => {
     const performed: PerformedSet[] = entry.sets
       .filter(
         (set) =>
@@ -96,18 +129,41 @@ export async function applyProgression(
         rir: set.rir ?? entry.targetRir,
       }));
 
-    const feedback: PartialFeedback = {
-      soreness: entry.soreness as PartialFeedback["soreness"],
-      pump: entry.pump as PartialFeedback["pump"],
-      workload: entry.workload as PartialFeedback["workload"],
-      jointPain: entry.jointPain as PartialFeedback["jointPain"],
-    };
+    const feedback = feedbackByMuscle.get(entry.muscleGroupId) ?? UNANSWERED;
 
     const muscleLandmarks = landmarks.get(entry.muscleGroupId) ?? {
       mev: 8,
       mav: 16,
       mrv: 22,
     };
+
+    // A skipped exercise is not evidence. Running the engine on it would read
+    // an untouched slot as a session that produced nothing and cut its sets on
+    // the strength of work that was never attempted — so it comes back exactly
+    // as it was, at the new week's effort target.
+    if (entry.plan === "skipped") {
+      const result: Prescription = {
+        sets: entry.targetSets,
+        setDelta: 0,
+        targetRir: rirForWeek(nextWeek, mesocycle.weeks, mesocycle.startRir),
+        weightKg: null,
+        loadDeltaPct: 0,
+        reasons: [{ code: "skipped_last_week" }],
+        suggestSwap: false,
+        suggestDeload: false,
+        isDeload: isDeloadWeek(nextWeek, mesocycle.weeks),
+      };
+
+      return {
+        entry,
+        result,
+        performed,
+        feedback,
+        muscleLandmarks,
+        reasonEn: renderReasons(result.reasons, "en"),
+        reasonPt: renderReasons(result.reasons, "pt"),
+      };
+    }
 
     const result = prescribe({
       week: nextWeek,
@@ -182,7 +238,10 @@ export async function applyProgression(
       data: prescriptions.map(({ entry, result }) => ({
         sessionId: nextSession.id,
         order: entry.order,
-        exerciseId: entry.exerciseId,
+        // A movement substituted for one day only leaves the plan as it was;
+        // `plan` and `plannedExerciseId` are deliberately not copied, so next
+        // week starts clean whatever happened in this one.
+        exerciseId: entry.plannedExerciseId ?? entry.exerciseId,
         muscleGroupId: entry.muscleGroupId,
         targetSets: result.sets,
         repMin: entry.repMin,
@@ -248,7 +307,9 @@ export async function weeklyVolumeByMuscle(
   week: number,
 ): Promise<Map<string, number>> {
   const entries = await db.sessionExercise.findMany({
-    where: { session: { mesocycleId, week } },
+    // A skipped exercise prescribes nothing: the muscle does not receive those
+    // sets, and this number is what the landmarks are compared against.
+    where: { session: { mesocycleId, week }, plan: { not: "skipped" } },
     select: { muscleGroupId: true, targetSets: true },
   });
 

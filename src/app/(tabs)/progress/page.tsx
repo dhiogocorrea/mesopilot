@@ -1,3 +1,4 @@
+import { BarChart, Sparkline } from "@/components/chart";
 import { Medal } from "@/components/medal";
 import {
   Chevron,
@@ -32,7 +33,9 @@ export default async function ProgressPage() {
     db.session.findMany({
       where: { status: "completed", mesocycle: { userId } },
       orderBy: { completedAt: "desc" },
-      take: 8,
+      // Deeper than the eight rows listed below: a trend line needs a run of
+      // sessions behind it, and this is one query either way.
+      take: 40,
       include: { entries: { include: { exercise: true, sets: true } } },
     }),
     achievementSummary(userId, locale),
@@ -128,26 +131,66 @@ export default async function ProgressPage() {
 
   const trained = muscles.filter((muscle) => (weeklyVolume.get(muscle.id) ?? 0) > 0);
 
-  const strength = new Map<string, { name: string; e1rm: number }>();
+  // Oldest first from here down: every series reads left to right as time.
+  const history = [...recent].reverse();
+
+  const perSession: { at: Date | null; sets: number; tonnage: number }[] = [];
+  const liftSeries = new Map<string, { name: string; e1rms: number[] }>();
   let totalSets = 0;
   let totalTonnage = 0;
 
-  for (const session of recent) {
+  for (const session of history) {
+    let sets = 0;
+    let tonnage = 0;
+    // Best estimate *per session*, so a lift trains one point per workout — a
+    // point per set would draw the warm-up ramp instead of the progression.
+    const bestThisSession = new Map<string, { name: string; e1rm: number }>();
+
     for (const entry of session.entries) {
       for (const set of entry.sets) {
         if (!set.completed || set.weightKg === null || set.reps === null) continue;
-        totalSets += 1;
-        totalTonnage += set.weightKg * set.reps;
+        sets += 1;
+        tonnage += set.weightKg * set.reps;
+
         const e1rm = estimateOneRepMax(set.weightKg, set.reps);
-        const existing = strength.get(entry.exerciseId);
-        if (!existing || e1rm > existing.e1rm) {
-          strength.set(entry.exerciseId, { name: localized(entry.exercise, locale), e1rm });
+        const best = bestThisSession.get(entry.exerciseId);
+        if (!best || e1rm > best.e1rm) {
+          bestThisSession.set(entry.exerciseId, {
+            name: localized(entry.exercise, locale),
+            e1rm,
+          });
         }
       }
     }
+
+    totalSets += sets;
+    totalTonnage += tonnage;
+    perSession.push({ at: session.completedAt, sets, tonnage });
+
+    for (const [exerciseId, best] of bestThisSession) {
+      const series = liftSeries.get(exerciseId) ?? { name: best.name, e1rms: [] };
+      series.e1rms.push(best.e1rm);
+      liftSeries.set(exerciseId, series);
+    }
   }
 
-  const topLifts = [...strength.values()].sort((a, b) => b.e1rm - a.e1rm).slice(0, 6);
+  // Ranked by what they lift now, not by how much they have improved: this is
+  // the list of their main lifts, and the trend beside each is the story.
+  const topLifts = [...liftSeries.values()]
+    .map((series) => ({
+      name: series.name,
+      e1rms: series.e1rms,
+      current: series.e1rms[series.e1rms.length - 1]!,
+      first: series.e1rms[0]!,
+    }))
+    .sort((a, b) => b.current - a.current)
+    .slice(0, 6);
+
+  // A phone fits about a fortnight of bars before they turn into a comb.
+  const tonnageBars = perSession.slice(-14).map((point) => ({
+    value: Math.round(fromKg(point.tonnage, unit)),
+    label: point.at ? formatDate(point.at, locale) : undefined,
+  }));
 
   return (
     <>
@@ -167,6 +210,12 @@ export default async function ProgressPage() {
             tone="accent"
           />
         </div>
+
+        {tonnageBars.length > 1 && (
+          <Section label={`${t("session.totalVolume")} · ${t("progress.perSession")}`}>
+            <BarChart points={tonnageBars} emptyLabel={t("progress.noData")} />
+          </Section>
+        )}
 
         {trained.length > 0 && (
           <Section label={t("progress.weeklyVolume")}>
@@ -195,24 +244,46 @@ export default async function ProgressPage() {
         {topLifts.length > 0 && (
           <Section label={`${t("progress.strength")} · ${t("progress.estimated1rm")}`}>
             <List>
-              {topLifts.map((lift) => (
-                <Row key={lift.name}>
-                  <div className="flex items-baseline justify-between gap-4 py-3.5">
-                    <span className="min-w-0 flex-1 truncate text-[15px]">{lift.name}</span>
-                    <span className="shrink-0 text-[15px] font-semibold tabular-nums">
-                      {formatNumber(fromKg(lift.e1rm, unit), locale)}
-                      <span className="ml-1 text-[13px] font-normal text-ink-3">{unit}</span>
-                    </span>
-                  </div>
-                </Row>
-              ))}
+              {topLifts.map((lift) => {
+                const delta = lift.current - lift.first;
+                return (
+                  <Row key={lift.name}>
+                    <div className="flex items-center gap-4 py-3.5">
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-[15px]">{lift.name}</span>
+                        {/* Only worth stating once it has moved. */}
+                        {lift.e1rms.length > 1 && Math.abs(fromKg(delta, unit)) >= 0.5 && (
+                          <span
+                            className={cx(
+                              "mt-0.5 block text-[13px] tabular-nums",
+                              delta > 0 ? "text-accent" : "text-ink-3",
+                            )}
+                          >
+                            {delta > 0 ? "+" : "−"}
+                            {formatNumber(Math.abs(fromKg(delta, unit)), locale, 1)} {unit}
+                          </span>
+                        )}
+                      </span>
+
+                      <span className="w-16 shrink-0">
+                        <Sparkline points={lift.e1rms} tone={delta >= 0 ? "accent" : "ink"} />
+                      </span>
+
+                      <span className="shrink-0 text-right text-[15px] font-semibold tabular-nums">
+                        {formatNumber(fromKg(lift.current, unit), locale)}
+                        <span className="ml-1 text-[13px] font-normal text-ink-3">{unit}</span>
+                      </span>
+                    </div>
+                  </Row>
+                );
+              })}
             </List>
           </Section>
         )}
 
         <Section label={t("progress.recentSessions")}>
           <List>
-            {recent.map((session) => {
+            {recent.slice(0, 8).map((session) => {
               const sets = session.entries.reduce(
                 (total, entry) => total + entry.sets.filter((set) => set.completed).length,
                 0,

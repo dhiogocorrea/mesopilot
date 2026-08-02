@@ -25,20 +25,54 @@ export function ScreenHeader({
   title,
   meta,
   action,
+  back,
+  backLabel,
+  leading,
 }: {
   eyebrow?: string;
   title: string;
   meta?: ReactNode;
   action?: ReactNode;
+  /** Sits before the title — an avatar on a screen that is about a person. */
+  leading?: ReactNode;
+  /**
+   * Where the back chevron goes. Required on any screen the bottom nav cannot
+   * reach — without it those are dead ends, since no tab is ever marked current
+   * and there is nothing on screen to leave by.
+   */
+  back?: string;
+  backLabel?: string;
 }) {
   return (
-    <header className="flex items-start justify-between gap-4 px-5 pb-6 pt-8">
-      <div className="min-w-0">
-        {eyebrow && <p className="text-label mb-2 uppercase text-ink-3">{eyebrow}</p>}
-        <h1 className="display-face text-title truncate">{title}</h1>
-        {meta && <div className="mt-1.5 text-sm text-ink-2">{meta}</div>}
+    <header className="px-5 pb-6 pt-8">
+      {back && (
+        <Link
+          href={back}
+          aria-label={backLabel}
+          className="tap -ml-2 -mt-2 mb-1 flex w-fit items-center gap-1 pr-3 text-[13px] font-medium text-ink-2"
+        >
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path
+              d="m14.5 5-7 7 7 7"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+          {backLabel}
+        </Link>
+      )}
+
+      <div className="flex items-center justify-between gap-4">
+        {leading && <div className="shrink-0">{leading}</div>}
+        <div className="min-w-0 flex-1">
+          {eyebrow && <p className="text-label mb-2 uppercase text-ink-3">{eyebrow}</p>}
+          <h1 className="display-face text-title truncate">{title}</h1>
+          {meta && <div className="mt-1.5 text-sm text-ink-2">{meta}</div>}
+        </div>
+        {action && <div className="shrink-0">{action}</div>}
       </div>
-      {action && <div className="shrink-0 pt-1">{action}</div>}
     </header>
   );
 }

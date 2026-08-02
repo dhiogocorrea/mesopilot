@@ -15,7 +15,7 @@ import { DEFAULT_LOCALE, isLocale, type Locale } from "@/lib/types";
  * in the language they picked.
  */
 
-const LOCALE_COOKIE = "mp_locale";
+const LOCALE_COOKIE = "m505_locale";
 const ONE_YEAR = 60 * 60 * 24 * 365;
 
 export async function getPreferredLocale(): Promise<Locale> {

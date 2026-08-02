@@ -48,6 +48,18 @@ export const DECISION_SOURCES = ["rule", "ai", "manual"] as const;
 export type DecisionSource = (typeof DECISION_SOURCES)[number];
 
 /**
+ * Whether an exercise in a logged session is part of the block's plan. The
+ * plan is the sessions themselves — next week is written from this week — so
+ * "extra" and "skipped" are how an edit stays confined to one day.
+ */
+export const ENTRY_PLANS = ["planned", "extra", "skipped"] as const;
+export type EntryPlan = (typeof ENTRY_PLANS)[number];
+
+/** Does an edit end with today, or does the plan change with it? */
+export const EDIT_SCOPES = ["session", "forward"] as const;
+export type EditScope = (typeof EDIT_SCOPES)[number];
+
+/**
  * Where a program or track came from. "custom" is the only one the athlete
  * authored — an imported program is theirs to edit but was written by someone
  * else, so the UI must not credit it to them.

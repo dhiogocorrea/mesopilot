@@ -18,6 +18,18 @@ const TIER_CLASS: Record<Tier, { ring: string; face: string; ink: string }> = {
   platinum: { ring: "border-accent", face: "bg-accent-soft", ink: "text-accent" },
 };
 
+/**
+ * The metals on their own, for places that rank without drawing a medal — the
+ * standings podium. Exported so those three colours are defined once; a second
+ * copy is how the gold on one screen drifts from the gold on another.
+ */
+export const TIER_INK: Record<Tier, string> = {
+  bronze: TIER_CLASS.bronze.ink,
+  silver: TIER_CLASS.silver.ink,
+  gold: TIER_CLASS.gold.ink,
+  platinum: TIER_CLASS.platinum.ink,
+};
+
 export function Medal({
   tier,
   locked = false,

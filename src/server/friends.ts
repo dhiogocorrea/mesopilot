@@ -3,6 +3,7 @@ import "server-only";
 import { db } from "@/lib/db";
 import { achievementFor, localizedAchievement, type Tier } from "@/lib/achievements/catalogue";
 import { currentStreakWeeks } from "@/lib/achievements/evaluate";
+import type { LeaderboardRow, RankPeriod, RankTotals } from "@/lib/standings";
 import type { Locale } from "@/lib/types";
 
 /**
@@ -287,5 +288,212 @@ export async function relationshipWith(
     id: row.id,
     status: row.status as FriendshipStatus,
     outgoing: row.requesterId === userId,
+  };
+}
+
+/**
+ * Start of the current calendar month, in the server's own zone. A deployment
+ * runs in UTC, so an athlete a few hours behind sees the month turn over early
+ * on the first — a better trade than threading a timezone through every row.
+ */
+function startOfMonth(): Date {
+  const now = new Date();
+  return new Date(now.getFullYear(), now.getMonth(), 1);
+}
+
+/**
+ * You and your friends, ranked — both windows from one pass.
+ *
+ * Points are summed from the unlock rows rather than recomputed, which is the
+ * whole reason they are snapshotted onto `UserAchievement`: re-pricing a medal
+ * later cannot rewrite a standing anyone already earned. The month is filtered
+ * on *when the medal was unlocked* rather than by replaying history — a medal
+ * is a thing that happened on a day, and `unlockedAt` is that day.
+ *
+ * Both totals come back together because the toggle between them should not
+ * cost a round trip: the rows are already in memory, and splitting them by date
+ * here is cheaper than asking the database the same question twice.
+ *
+ * Sessions break the ties, and they do a lot of work: medals are milestones, so
+ * a month where nobody crosses one would otherwise rank everyone equal and fall
+ * back to alphabetical. Ordering those rows by training done is what the board
+ * was being asked anyway.
+ *
+ * Scoped to accepted friends and the viewer. There is no global board, because
+ * a stranger's total is not something either of you agreed to share.
+ */
+export async function leaderboard(userId: string): Promise<LeaderboardRow[]> {
+  const ids = [...(await friendIds(userId)), userId];
+  const since = startOfMonth();
+
+  const [users, medals, sessions] = await Promise.all([
+    db.user.findMany({
+      where: { id: { in: ids } },
+      select: { id: true, username: true, name: true },
+    }),
+    db.userAchievement.findMany({
+      where: { userId: { in: ids } },
+      select: { userId: true, points: true, unlockedAt: true },
+    }),
+    db.session.findMany({
+      where: { status: "completed", mesocycle: { userId: { in: ids } } },
+      select: { completedAt: true, mesocycle: { select: { userId: true } } },
+    }),
+  ]);
+
+  const empty = (): RankTotals => ({ points: 0, medals: 0, sessions: 0 });
+  const totals = new Map<string, Record<RankPeriod, RankTotals>>(
+    ids.map((id) => [id, { all: empty(), month: empty() }]),
+  );
+
+  for (const medal of medals) {
+    const row = totals.get(medal.userId);
+    if (!row) continue;
+    row.all.points += medal.points;
+    row.all.medals += 1;
+    if (medal.unlockedAt >= since) {
+      row.month.points += medal.points;
+      row.month.medals += 1;
+    }
+  }
+
+  for (const session of sessions) {
+    const row = totals.get(session.mesocycle.userId);
+    if (!row) continue;
+    row.all.sessions += 1;
+    if (session.completedAt && session.completedAt >= since) row.month.sessions += 1;
+  }
+
+  return users.map((user) => ({
+    userId: user.id,
+    username: user.username,
+    name: user.name,
+    you: user.id === userId,
+    all: totals.get(user.id)!.all,
+    month: totals.get(user.id)!.month,
+  }));
+}
+
+export type FriendProfile = {
+  username: string;
+  name: string;
+  points: number;
+  medals: number;
+  sessions: number;
+  streakWeeks: number;
+  tonnageKg: number;
+  setsLogged: number;
+  unlocked: {
+    key: string;
+    name: string;
+    description: string;
+    tier: Tier;
+    points: number;
+    unlockedAt: Date;
+  }[];
+  recent: { id: string; label: string; week: number; at: Date; sets: number; tonnageKg: number }[];
+};
+
+/**
+ * One friend's page: what they have trained and what they have won.
+ *
+ * Returns null unless the two accounts are *accepted* friends — the username in
+ * the URL is a guess until this says otherwise, and the check has to happen
+ * here rather than in the page, because this is the function that reads the
+ * rows. Only earned medals are listed: the locked ones carry progress towards
+ * every threshold, which would hand over a reconstruction of their whole
+ * training profile rather than the highlights they agreed to share.
+ */
+export async function friendProfile(
+  userId: string,
+  username: string,
+  locale: Locale,
+): Promise<FriendProfile | null> {
+  const user = await db.user.findUnique({
+    where: { username },
+    // Explicit, like every other read here: never widen this to the profile.
+    select: { id: true, username: true, name: true },
+  });
+  if (!user) return null;
+
+  const relationship = await relationshipWith(userId, user.id);
+  if (relationship?.status !== "accepted") return null;
+
+  const [medals, sessions] = await Promise.all([
+    db.userAchievement.findMany({
+      where: { userId: user.id },
+      orderBy: { unlockedAt: "desc" },
+      select: { key: true, points: true, unlockedAt: true },
+    }),
+    db.session.findMany({
+      where: { status: "completed", mesocycle: { userId: user.id } },
+      orderBy: { completedAt: "desc" },
+      select: {
+        id: true,
+        label: true,
+        week: true,
+        completedAt: true,
+        entries: { select: { sets: { select: { weightKg: true, reps: true, completed: true } } } },
+      },
+    }),
+  ]);
+
+  let tonnageKg = 0;
+  let setsLogged = 0;
+  const dates: Date[] = [];
+  const recent: FriendProfile["recent"] = [];
+
+  for (const session of sessions) {
+    let sessionSets = 0;
+    let sessionTonnage = 0;
+    for (const entry of session.entries) {
+      for (const set of entry.sets) {
+        if (!set.completed || set.weightKg === null || set.reps === null) continue;
+        sessionSets += 1;
+        sessionTonnage += set.weightKg * set.reps;
+      }
+    }
+
+    setsLogged += sessionSets;
+    tonnageKg += sessionTonnage;
+    if (session.completedAt) dates.push(session.completedAt);
+
+    if (session.completedAt && recent.length < 10) {
+      recent.push({
+        id: session.id,
+        label: session.label,
+        week: session.week,
+        at: session.completedAt,
+        sets: sessionSets,
+        tonnageKg: Math.round(sessionTonnage),
+      });
+    }
+  }
+
+  return {
+    username: user.username,
+    name: user.name,
+    points: medals.reduce((total, medal) => total + medal.points, 0),
+    medals: medals.length,
+    sessions: sessions.length,
+    streakWeeks: currentStreakWeeks(dates),
+    tonnageKg: Math.round(tonnageKg),
+    setsLogged,
+    unlocked: medals.flatMap((medal) => {
+      const achievement = achievementFor(medal.key);
+      if (!achievement) return [];
+      const text = localizedAchievement(achievement, locale);
+      return [
+        {
+          key: medal.key,
+          name: text.name,
+          description: text.description,
+          tier: achievement.tier,
+          points: medal.points,
+          unlockedAt: medal.unlockedAt,
+        },
+      ];
+    }),
+    recent,
   };
 }

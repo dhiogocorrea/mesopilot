@@ -1,4 +1,4 @@
-# MesoPilot
+# Meso505
 
 A mobile-first training app for hypertrophy, built around the Renaissance Periodization
 autoregulation model: you log what you actually lifted, answer four questions about how
@@ -56,9 +56,14 @@ English and Brazilian Portuguese throughout, including the exercise library.
 
 ## Accounts
 
-Username and password, sessions in an httpOnly cookie. Passwords are hashed with scrypt
-from Node's standard library; the cookie holds a random opaque token and the database
-stores only its SHA-256, so a leaked dump cannot be replayed as a login.
+Sign in with a username or email and a password, or with Google. Passwords are hashed
+with scrypt from Node's standard library; the session cookie holds a random opaque token
+and the database stores only its SHA-256, so a leaked dump cannot be replayed as a login.
+
+Signing up sends a confirmation email through Resend. Confirming is not required to
+train — the app works either way — and Settings shows the status with a button to send
+the link again. Without `RESEND_API_KEY` the email is printed to the server console,
+link included, so the whole flow works in development.
 
 Each account's training data is its own. Server actions are public HTTP endpoints, so
 every one that takes an id checks who owns it before writing — see

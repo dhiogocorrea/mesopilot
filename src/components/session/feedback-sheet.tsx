@@ -5,12 +5,15 @@ import { useState, useTransition } from "react";
 import { useI18n } from "@/lib/i18n/provider";
 import type { DictionaryKey } from "@/lib/i18n";
 import { saveFeedback } from "@/server/actions";
+import { Sheet } from "../sheet";
 import { Button, Segmented } from "../ui";
 
 /**
- * The four autoregulation questions. Answering them is what lets the engine
- * decide next week's volume, so the UI nags for them rather than hiding them
- * behind a menu.
+ * The four autoregulation questions, asked once per muscle group.
+ *
+ * They are about a muscle rather than a movement — "how sore was your chest
+ * coming in" has one answer however many chest exercises you did — so this
+ * opens after the last exercise of a muscle, not under every one of them.
  */
 
 type Question = {
@@ -64,14 +67,28 @@ export type FeedbackValues = {
   jointPain: number | null;
 };
 
-export function FeedbackForm({
-  sessionExerciseId,
+export const NO_FEEDBACK: FeedbackValues = {
+  soreness: null,
+  pump: null,
+  workload: null,
+  jointPain: null,
+};
+
+export function FeedbackSheet({
+  open,
+  onClose,
+  sessionId,
+  muscleGroupId,
+  muscleName,
   initial,
-  onSaved,
 }: {
-  sessionExerciseId: string;
+  open: boolean;
+  onClose: () => void;
+  sessionId: string;
+  muscleGroupId: string;
+  /** Named in the heading: which muscle these four answers are about. */
+  muscleName: string;
   initial: FeedbackValues;
-  onSaved?: () => void;
 }) {
   const { t } = useI18n();
   const [values, setValues] = useState<FeedbackValues>(initial);
@@ -83,41 +100,48 @@ export function FeedbackForm({
     if (!complete) return;
     startTransition(async () => {
       await saveFeedback({
-        sessionExerciseId,
+        sessionId,
+        muscleGroupId,
         soreness: values.soreness!,
         pump: values.pump!,
         workload: values.workload!,
         jointPain: values.jointPain!,
       });
-      onSaved?.();
+      onClose();
     });
   }
 
   return (
-    <div className="space-y-5 rounded-2xl border border-hairline bg-surface p-4">
-      <div>
-        <p className="text-headline">{t("feedback.title")}</p>
-        <p className="mt-1 text-[13px] leading-relaxed text-ink-2">{t("feedback.subtitle")}</p>
-      </div>
+    <Sheet
+      open={open}
+      onClose={onClose}
+      title={t("feedback.titleFor", { muscle: muscleName })}
+      subtitle={t("feedback.subtitle")}
+    >
+      <div className="space-y-5">
+        {QUESTIONS.map((question) => (
+          <div key={question.key}>
+            <p className="text-label mb-2 uppercase text-ink-3">{t(question.question)}</p>
+            <Segmented
+              value={values[question.key]}
+              onChange={(value) => setValues((current) => ({ ...current, [question.key]: value }))}
+              columns={1}
+              options={question.options.map((option, index) => ({
+                value: index,
+                label: t(option),
+              }))}
+            />
+          </div>
+        ))}
 
-      {QUESTIONS.map((question) => (
-        <div key={question.key}>
-          <p className="text-label mb-2 uppercase text-ink-3">{t(question.question)}</p>
-          <Segmented
-            value={values[question.key]}
-            onChange={(value) => setValues((current) => ({ ...current, [question.key]: value }))}
-            columns={1}
-            options={question.options.map((option, index) => ({
-              value: index,
-              label: t(option),
-            }))}
-          />
+        {/* Sticky so the answer is one tap away from wherever the athlete has
+            scrolled to, rather than at the end of a list of twelve buttons. */}
+        <div className="sticky bottom-0 -mx-5 border-t border-hairline bg-surface px-5 pb-1 pt-3">
+          <Button full disabled={!complete || pending} onClick={submit}>
+            {pending ? t("common.loading") : t("feedback.submit")}
+          </Button>
         </div>
-      ))}
-
-      <Button full disabled={!complete || pending} onClick={submit}>
-        {pending ? t("common.loading") : t("feedback.submit")}
-      </Button>
-    </div>
+      </div>
+    </Sheet>
   );
 }

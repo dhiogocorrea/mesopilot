@@ -260,7 +260,7 @@ async function seedTracks(): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  console.log("Seeding MesoPilot…");
+  console.log("Seeding Meso505…");
   const muscleIds = await seedMuscles();
   const exerciseIds = await seedExercises(muscleIds);
   await seedTemplates(muscleIds, exerciseIds);

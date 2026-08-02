@@ -73,10 +73,10 @@ function FlagBR() {
       <path d="M10 1.6 18.4 7 10 12.4 1.6 7Z" fill="#fedf00" />
       <circle cx="10" cy="7" r="3.1" fill="#002776" />
       {/* The band, clipped to the disc so it reads as the globe not a stripe. */}
-      <clipPath id="mp-br-disc">
+      <clipPath id="m505-br-disc">
         <circle cx="10" cy="7" r="3.1" />
       </clipPath>
-      <path d="M6.6 7.7a7 7 0 0 1 6.9 0.5l0 0.9a7 7 0 0 0-6.9-0.5Z" fill="#fff" clipPath="url(#mp-br-disc)" />
+      <path d="M6.6 7.7a7 7 0 0 1 6.9 0.5l0 0.9a7 7 0 0 0-6.9-0.5Z" fill="#fff" clipPath="url(#m505-br-disc)" />
     </svg>
   );
 }

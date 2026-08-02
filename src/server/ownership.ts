@@ -17,14 +17,18 @@ import { db } from "@/lib/db";
 
 const DENIED = "Not found";
 
-/** Session → Mesocycle → User. Returns the mesocycle a session belongs to. */
+/**
+ * Session → Mesocycle → User. Returns the mesocycle a session belongs to, and
+ * its status: a completed session is history, and every writer needs to know
+ * that without paying for a second read.
+ */
 export async function assertOwnsSession(
   sessionId: string,
   userId: string,
-): Promise<{ mesocycleId: string; week: number }> {
+): Promise<{ mesocycleId: string; week: number; status: string }> {
   const session = await db.session.findFirst({
     where: { id: sessionId, mesocycle: { userId } },
-    select: { mesocycleId: true, week: true },
+    select: { mesocycleId: true, week: true, status: true },
   });
 
   if (!session) throw new Error(DENIED);
@@ -35,28 +39,35 @@ export async function assertOwnsSession(
 export async function assertOwnsSessionExercise(
   entryId: string,
   userId: string,
-): Promise<{ sessionId: string }> {
+): Promise<{ sessionId: string; status: string }> {
   const entry = await db.sessionExercise.findFirst({
     where: { id: entryId, session: { mesocycle: { userId } } },
-    select: { sessionId: true },
+    select: { sessionId: true, session: { select: { status: true } } },
   });
 
   if (!entry) throw new Error(DENIED);
-  return entry;
+  return { sessionId: entry.sessionId, status: entry.session.status };
 }
 
 /** SetLog → SessionExercise → Session → Mesocycle → User. */
 export async function assertOwnsSetLog(
   setId: string,
   userId: string,
-): Promise<{ sessionExerciseId: string; sessionId: string }> {
+): Promise<{ sessionExerciseId: string; sessionId: string; status: string }> {
   const set = await db.setLog.findFirst({
     where: { id: setId, sessionExercise: { session: { mesocycle: { userId } } } },
-    select: { sessionExerciseId: true, sessionExercise: { select: { sessionId: true } } },
+    select: {
+      sessionExerciseId: true,
+      sessionExercise: { select: { sessionId: true, session: { select: { status: true } } } },
+    },
   });
 
   if (!set) throw new Error(DENIED);
-  return { sessionExerciseId: set.sessionExerciseId, sessionId: set.sessionExercise.sessionId };
+  return {
+    sessionExerciseId: set.sessionExerciseId,
+    sessionId: set.sessionExercise.sessionId,
+    status: set.sessionExercise.session.status,
+  };
 }
 
 export async function assertOwnsMesocycle(mesocycleId: string, userId: string): Promise<void> {

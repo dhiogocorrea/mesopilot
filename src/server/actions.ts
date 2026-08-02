@@ -11,6 +11,7 @@ import { rirForWeek } from "@/lib/progression/engine";
 import { estimateProgramMinutes } from "@/lib/training-time";
 import {
   CALORIC_STATES,
+  EDIT_SCOPES,
   EQUIPMENT,
   EXPERIENCE_LEVELS,
   GOALS,
@@ -360,7 +361,7 @@ const logSetSchema = z.object({
 export async function logSet(input: z.infer<typeof logSetSchema>): Promise<void> {
   const data = logSetSchema.parse(input);
   const { userId } = await getUserContext();
-  await assertOwnsSetLog(data.setId, userId);
+  assertSessionOpen((await assertOwnsSetLog(data.setId, userId)).status);
 
   const set = await db.setLog.update({
     where: { id: data.setId },
@@ -380,7 +381,7 @@ export async function logSet(input: z.infer<typeof logSetSchema>): Promise<void>
 export async function addSet(sessionExerciseId: string): Promise<void> {
   const id = z.string().min(1).parse(sessionExerciseId);
   const { userId } = await getUserContext();
-  await assertOwnsSessionExercise(id, userId);
+  assertSessionOpen((await assertOwnsSessionExercise(id, userId)).status);
 
   const entry = await db.sessionExercise.findUnique({
     where: { id },
@@ -411,7 +412,7 @@ export async function addSet(sessionExerciseId: string): Promise<void> {
 export async function removeSet(setId: string): Promise<void> {
   const id = z.string().min(1).parse(setId);
   const { userId } = await getUserContext();
-  await assertOwnsSetLog(id, userId);
+  assertSessionOpen((await assertOwnsSetLog(id, userId)).status);
 
   const set = await db.setLog.findUnique({
     where: { id },
@@ -430,31 +431,239 @@ export async function removeSet(setId: string): Promise<void> {
   revalidatePath(`/session/${set.sessionExercise.sessionId}`);
 }
 
-const feedbackSchema = z.object({
+// ------------------------------------------- editing a session in progress
+
+/**
+ * A completed session is history: its numbers have already been read by the
+ * progression engine, which wrote next week from them. Editing one in place
+ * would leave the two disagreeing with nothing to notice, so every writer
+ * closes here and `reopenSession` is the only way back in.
+ */
+const SESSION_CLOSED = "errors.sessionClosed";
+
+function assertSessionOpen(status: string): void {
+  if (status === "completed") throw new Error(SESSION_CLOSED);
+}
+
+/**
+ * The plan is the sessions themselves: next week is generated from this week's
+ * entries, so anything changed in the logger changes the block unless the row
+ * is marked otherwise. `scope` is what the athlete is asked, and these three
+ * actions are the only writers of `plan` / `plannedExerciseId`.
+ *
+ * All three refuse once a set has been ticked on the entry. Substituting a
+ * movement under logged numbers would file those numbers against a lift that
+ * never did them, and `getPreviousPerformance` keys on the exercise — the
+ * corrupted comparison then outlives the session. Finished work is added to,
+ * not rewritten.
+ */
+
+async function loadEditableEntry(sessionExerciseId: string, userId: string) {
+  assertSessionOpen((await assertOwnsSessionExercise(sessionExerciseId, userId)).status);
+
+  const entry = await db.sessionExercise.findUnique({
+    where: { id: sessionExerciseId },
+    include: { sets: { select: { completed: true } } },
+  });
+  if (!entry) throw new Error(`Session exercise ${sessionExerciseId} not found`);
+  if (entry.sets.some((set) => set.completed)) throw new Error("errors.entryLogged");
+
+  return entry;
+}
+
+const swapExerciseSchema = z.object({
   sessionExerciseId: z.string().min(1),
+  exerciseId: z.string().min(1),
+  scope: z.enum(EDIT_SCOPES),
+});
+
+/**
+ * Substitute one movement for another in a session already under way — the
+ * rack is taken, the cable station is busy.
+ *
+ * Only within the same muscle group. The slot carries a muscle's volume, and
+ * that volume is what the engine reasons about; letting a chest slot become a
+ * biceps one would silently move a week's sets between two landmarks.
+ */
+export async function swapSessionExercise(input: z.infer<typeof swapExerciseSchema>): Promise<void> {
+  const data = swapExerciseSchema.parse(input);
+  const { userId } = await getUserContext();
+
+  const entry = await loadEditableEntry(data.sessionExerciseId, userId);
+  await assertCanUseExercise(data.exerciseId, userId);
+
+  const replacement = await db.exercise.findUnique({
+    where: { id: data.exerciseId },
+    select: { muscleGroupId: true },
+  });
+  if (!replacement) throw new Error(`Exercise ${data.exerciseId} not found`);
+  if (replacement.muscleGroupId !== entry.muscleGroupId) throw new Error("errors.wrongMuscle");
+
+  // Swapping back to what the plan says is not a second substitution — it is
+  // the athlete undoing the first one.
+  const restored = data.exerciseId === entry.plannedExerciseId;
+
+  await db.$transaction([
+    db.sessionExercise.update({
+      where: { id: entry.id },
+      // Only which movement fills the slot changes. Sets, reps, RIR and rest
+      // are the plan's prescription for this muscle, and leaving them alone is
+      // what makes a one-off swap exactly reversible next week.
+      data: {
+        exerciseId: data.exerciseId,
+        plannedExerciseId:
+          data.scope === "forward" || restored
+            ? null
+            : // A second swap in one session still owes the plan its original.
+              (entry.plannedExerciseId ?? entry.exerciseId),
+      },
+    }),
+    // The new movement has its own loads, so clear the carried-over numbers.
+    db.setLog.updateMany({
+      where: { sessionExerciseId: entry.id, completed: false },
+      data: { weightKg: null },
+    }),
+  ]);
+
+  revalidatePath(`/session/${entry.sessionId}`);
+}
+
+const addExerciseSchema = z.object({
+  sessionId: z.string().min(1),
+  exerciseId: z.string().min(1),
+  scope: z.enum(EDIT_SCOPES),
+});
+
+/** Append an exercise to a session in progress, with its own set rows. */
+export async function addExerciseToSession(
+  input: z.infer<typeof addExerciseSchema>,
+): Promise<void> {
+  const data = addExerciseSchema.parse(input);
+  const { userId } = await getUserContext();
+
+  assertSessionOpen((await assertOwnsSession(data.sessionId, userId)).status);
+  await assertCanUseExercise(data.exerciseId, userId);
+
+  const [session, exercise] = await Promise.all([
+    db.session.findUnique({
+      where: { id: data.sessionId },
+      include: {
+        mesocycle: { select: { weeks: true, startRir: true } },
+        entries: { orderBy: { order: "desc" }, take: 1, select: { order: true } },
+      },
+    }),
+    db.exercise.findUnique({ where: { id: data.exerciseId } }),
+  ]);
+
+  if (!session) throw new Error(`Session ${data.sessionId} not found`);
+  if (!exercise) throw new Error(`Exercise ${data.exerciseId} not found`);
+
+  // The effort target belongs to the week, not to the movement: an exercise
+  // added on week 4 is done at week 4's RIR like everything beside it.
+  const targetRir = rirForWeek(session.week, session.mesocycle.weeks, session.mesocycle.startRir);
+  const targetSets = 3;
+
+  await db.sessionExercise.create({
+    data: {
+      sessionId: session.id,
+      order: (session.entries[0]?.order ?? -1) + 1,
+      exerciseId: exercise.id,
+      muscleGroupId: exercise.muscleGroupId,
+      plan: data.scope === "forward" ? "planned" : "extra",
+      targetSets,
+      repMin: exercise.defaultRepMin,
+      repMax: exercise.defaultRepMax,
+      targetRir,
+      restSec: exercise.defaultRestSec,
+      sets: { create: Array.from({ length: targetSets }, (_, index) => ({ order: index })) },
+    },
+  });
+
+  revalidatePath(`/session/${session.id}`);
+}
+
+const removeExerciseSchema = z.object({
+  sessionExerciseId: z.string().min(1),
+  scope: z.enum(EDIT_SCOPES),
+});
+
+/**
+ * Drop an exercise from today. Scoped to the session it stays in the plan and
+ * comes back next week, which is why the row is marked rather than deleted;
+ * scoped forward there is nothing left to carry, so the row goes.
+ */
+export async function removeExerciseFromSession(
+  input: z.infer<typeof removeExerciseSchema>,
+): Promise<void> {
+  const data = removeExerciseSchema.parse(input);
+  const { userId } = await getUserContext();
+
+  const entry = await loadEditableEntry(data.sessionExerciseId, userId);
+
+  if (data.scope === "forward" || entry.plan === "extra") {
+    // Nothing to carry: either the athlete is removing it from the block, or
+    // it was only ever added for today and has no plan to return to.
+    await db.sessionExercise.delete({ where: { id: entry.id } });
+  } else {
+    await db.sessionExercise.update({ where: { id: entry.id }, data: { plan: "skipped" } });
+  }
+
+  revalidatePath(`/session/${entry.sessionId}`);
+}
+
+/** Put a skipped exercise back into today's session. */
+export async function restoreExerciseToSession(sessionExerciseId: string): Promise<void> {
+  const id = z.string().min(1).parse(sessionExerciseId);
+  const { userId } = await getUserContext();
+  assertSessionOpen((await assertOwnsSessionExercise(id, userId)).status);
+
+  const entry = await db.sessionExercise.update({
+    where: { id },
+    data: { plan: "planned" },
+    select: { sessionId: true },
+  });
+
+  revalidatePath(`/session/${entry.sessionId}`);
+}
+
+const feedbackSchema = z.object({
+  sessionId: z.string().min(1),
+  muscleGroupId: z.string().min(1),
   soreness: z.number().int().min(0).max(3),
   pump: z.number().int().min(0).max(2),
   workload: z.number().int().min(0).max(3),
   jointPain: z.number().int().min(0).max(2),
 });
 
+/**
+ * One answer per muscle group per session. Re-answering overwrites rather than
+ * adding a second row — the athlete changing their mind about how sore their
+ * chest was is a correction, not a new data point.
+ */
 export async function saveFeedback(input: z.infer<typeof feedbackSchema>): Promise<void> {
   const data = feedbackSchema.parse(input);
   const { userId } = await getUserContext();
-  await assertOwnsSessionExercise(data.sessionExerciseId, userId);
+  assertSessionOpen((await assertOwnsSession(data.sessionId, userId)).status);
 
-  const entry = await db.sessionExercise.update({
-    where: { id: data.sessionExerciseId },
-    data: {
-      soreness: data.soreness,
-      pump: data.pump,
-      workload: data.workload,
-      jointPain: data.jointPain,
+  const answers = {
+    soreness: data.soreness,
+    pump: data.pump,
+    workload: data.workload,
+    jointPain: data.jointPain,
+  };
+
+  await db.sessionMuscleFeedback.upsert({
+    where: {
+      sessionId_muscleGroupId: {
+        sessionId: data.sessionId,
+        muscleGroupId: data.muscleGroupId,
+      },
     },
-    select: { sessionId: true },
+    create: { sessionId: data.sessionId, muscleGroupId: data.muscleGroupId, ...answers },
+    update: { ...answers, answeredAt: new Date() },
   });
 
-  revalidatePath(`/session/${entry.sessionId}`);
+  revalidatePath(`/session/${data.sessionId}`);
 }
 
 export async function saveSessionNotes(sessionId: string, notes: string): Promise<void> {
@@ -507,6 +716,100 @@ export async function finishSession(sessionId: string): Promise<void> {
   // what the athlete actually holds before showing it.
   const query = earned.length > 0 ? `?earned=${earned.map((a) => a.key).join(",")}` : "";
   redirect(`/session/${id}/summary${query}`);
+}
+
+// ---------------------------------------- undoing a completed session
+
+const reopenSchema = z.object({
+  sessionId: z.string().min(1),
+  /** Also wipe what was logged, for a session that should never have existed. */
+  clear: z.boolean(),
+});
+
+/**
+ * Puts a finished session back in play — a mistyped load, a session finished by
+ * accident.
+ *
+ * Deleting one instead is not on offer, and the reason is structural: the block
+ * is a chain, and each session is written by finishing the one before it. Week 3
+ * Day 1 exists *because* Week 2 Day 1 was completed. Removing a link would leave
+ * that day with no way to ever produce another session, so reopening rewinds the
+ * chain rather than cutting it, and `clear` covers "this never happened".
+ *
+ * The week this session produced is deleted, because finishing again writes it
+ * afresh from the corrected numbers. That is only safe while nothing has been
+ * logged against it — a correction is not worth someone else's real sets, so
+ * once next week is under way this refuses and says why.
+ *
+ * Achievements are deliberately **not** revoked; see `awardAchievements`.
+ */
+export async function reopenSession(input: z.infer<typeof reopenSchema>): Promise<void> {
+  const data = reopenSchema.parse(input);
+  const { userId } = await getUserContext();
+  const { mesocycleId, week, status } = await assertOwnsSession(data.sessionId, userId);
+  if (status !== "completed") return;
+
+  const session = await db.session.findUnique({
+    where: { id: data.sessionId },
+    select: { dayIndex: true, mesocycle: { select: { weeks: true, status: true } } },
+  });
+  if (!session) throw new Error(`Session ${data.sessionId} not found`);
+
+  const generated = await db.session.findUnique({
+    where: {
+      mesocycleId_week_dayIndex: { mesocycleId, week: week + 1, dayIndex: session.dayIndex },
+    },
+    select: {
+      id: true,
+      status: true,
+      entries: { select: { sets: { select: { completed: true } } } },
+    },
+  });
+
+  const nextIsUnderway =
+    generated !== null &&
+    (generated.status !== "planned" ||
+      generated.entries.some((entry) => entry.sets.some((set) => set.completed)));
+
+  if (nextIsUnderway) throw new Error("errors.nextStarted");
+
+  await db.$transaction(async (tx) => {
+    // Cascades its entries, their sets and the decisions that explained them.
+    if (generated) await tx.session.delete({ where: { id: generated.id } });
+
+    await tx.session.update({
+      where: { id: data.sessionId },
+      data: {
+        status: data.clear ? "planned" : "in_progress",
+        completedAt: null,
+        ...(data.clear ? { startedAt: null } : {}),
+      },
+    });
+
+    if (data.clear) {
+      await tx.sessionMuscleFeedback.deleteMany({ where: { sessionId: data.sessionId } });
+      await tx.setLog.updateMany({
+        where: { sessionExercise: { sessionId: data.sessionId } },
+        // The prescribed load stays: it is the plan for the session, not a
+        // record of it, and blanking it would make a reset session harder to
+        // start than a fresh one.
+        data: { reps: null, rir: null, completed: false, loggedAt: null },
+      });
+    }
+
+    // The block is marked completed by whichever final-week session is finished
+    // first, so reopening one has to put it back into play — otherwise the
+    // athlete is left with an active-looking session inside a closed block.
+    if (week >= session.mesocycle.weeks && session.mesocycle.status === "completed") {
+      await tx.mesocycle.update({
+        where: { id: mesocycleId },
+        data: { status: "active", completedAt: null },
+      });
+    }
+  });
+
+  revalidatePath("/", "layout");
+  redirect(`/session/${data.sessionId}`);
 }
 
 // ------------------------------------------------------------ exercises
@@ -597,109 +900,3 @@ export async function archiveExercise(exerciseId: string): Promise<void> {
   revalidatePath("/exercises");
 }
 
-/** Swaps one exercise for another inside a single upcoming session. */
-export async function swapSessionExercise(
-  sessionExerciseId: string,
-  exerciseId: string,
-): Promise<void> {
-  const entryId = z.string().min(1).parse(sessionExerciseId);
-  const nextExerciseId = z.string().min(1).parse(exerciseId);
-  const { userId } = await getUserContext();
-
-  await Promise.all([
-    assertOwnsSessionExercise(entryId, userId),
-    assertCanUseExercise(nextExerciseId, userId),
-  ]);
-
-  const [entry, exercise] = await Promise.all([
-    db.sessionExercise.findUnique({ where: { id: entryId } }),
-    db.exercise.findUnique({ where: { id: nextExerciseId } }),
-  ]);
-
-  if (!entry || !exercise) throw new Error("Exercise swap target not found");
-
-  await db.$transaction([
-    db.sessionExercise.update({
-      where: { id: entryId },
-      data: {
-        exerciseId: exercise.id,
-        muscleGroupId: exercise.muscleGroupId,
-        repMin: exercise.defaultRepMin,
-        repMax: exercise.defaultRepMax,
-        restSec: exercise.defaultRestSec,
-      },
-    }),
-    // The new movement has its own loads, so clear the carried-over numbers.
-    db.setLog.updateMany({
-      where: { sessionExerciseId: entryId, completed: false },
-      data: { weightKg: null },
-    }),
-  ]);
-
-  revalidatePath(`/session/${entry.sessionId}`);
-}
-
-export async function addExerciseToSession(
-  sessionId: string,
-  exerciseId: string,
-): Promise<void> {
-  const id = z.string().min(1).parse(sessionId);
-  const nextExerciseId = z.string().min(1).parse(exerciseId);
-  const { userId } = await getUserContext();
-
-  await Promise.all([
-    assertOwnsSession(id, userId),
-    assertCanUseExercise(nextExerciseId, userId),
-  ]);
-
-  const [session, exercise] = await Promise.all([
-    db.session.findUnique({
-      where: { id },
-      include: {
-        mesocycle: true,
-        entries: { orderBy: { order: "desc" }, take: 1 },
-      },
-    }),
-    db.exercise.findUnique({ where: { id: nextExerciseId } }),
-  ]);
-
-  if (!session || !exercise) throw new Error("Cannot add exercise to session");
-
-  const entry = await db.sessionExercise.create({
-    data: {
-      sessionId: id,
-      order: (session.entries[0]?.order ?? -1) + 1,
-      exerciseId: exercise.id,
-      muscleGroupId: exercise.muscleGroupId,
-      targetSets: 3,
-      repMin: exercise.defaultRepMin,
-      repMax: exercise.defaultRepMax,
-      targetRir: rirForWeek(session.week, session.mesocycle.weeks, session.mesocycle.startRir),
-      restSec: exercise.defaultRestSec,
-    },
-  });
-
-  await db.setLog.createMany({
-    data: Array.from({ length: 3 }, (_, index) => ({
-      sessionExerciseId: entry.id,
-      order: index,
-    })),
-  });
-
-  revalidatePath(`/session/${id}`);
-}
-
-export async function removeExerciseFromSession(sessionExerciseId: string): Promise<void> {
-  const id = z.string().min(1).parse(sessionExerciseId);
-  const { userId } = await getUserContext();
-  await assertOwnsSessionExercise(id, userId);
-
-  const entry = await db.sessionExercise.findUnique({
-    where: { id },
-    select: { sessionId: true },
-  });
-  if (!entry) return;
-
-  await db.sessionExercise.delete({ where: { id } });
-  revalidatePath(`/session/${entry.sessionId}`);
-}

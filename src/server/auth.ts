@@ -23,7 +23,7 @@ const scrypt = promisify(scryptCallback) as (
   keylen: number,
 ) => Promise<Buffer>;
 
-const SESSION_COOKIE = "mp_session";
+const SESSION_COOKIE = "m505_session";
 const SESSION_DAYS = 30;
 const KEY_LENGTH = 64;
 

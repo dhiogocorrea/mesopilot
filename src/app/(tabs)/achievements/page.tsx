@@ -14,6 +14,8 @@ export default async function AchievementsPage() {
   return (
     <>
       <ScreenHeader
+        back="/progress"
+        backLabel={t("progress.title")}
         title={t("achv.title")}
         meta={t("achv.earnedOf", { earned: unlocked.length, total })}
       />

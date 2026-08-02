@@ -4,7 +4,7 @@
 This version has breaking changes — APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` before writing any code. Heed deprecation notices.
 <!-- END:nextjs-agent-rules -->
 
-# MesoPilot
+# Meso505
 
 Mobile-first hypertrophy training app. Next.js 16 (App Router) + Prisma 7 + PostgreSQL,
 modelled on the Renaissance Periodization autoregulation method.
@@ -28,10 +28,32 @@ modelled on the Renaissance Periodization autoregulation method.
 
 ## Accounts and authorisation
 
-Username + password, sessions in an httpOnly cookie. `src/server/auth.ts` is the whole
-mechanism: scrypt from `node:crypto` for passwords, a random opaque token in the cookie,
-and only its SHA-256 in `AuthSession` so a database dump cannot be replayed as a login.
-The training-session model is `Session`, so the auth one had to be `AuthSession`.
+Sessions are an httpOnly cookie holding a random opaque token, with only its SHA-256 in
+`AuthSession` so a database dump cannot be replayed as a login. `src/server/auth.ts` is
+that whole mechanism, plus scrypt from `node:crypto` for passwords. The training-session
+model is `Session`, so the auth one had to be `AuthSession`.
+
+Three ways in, all landing on the same session:
+
+- **Username or email + password.** `passwordHash` is nullable — a Google-only account
+  has none, and `signIn` treats that exactly like a wrong password so the form never
+  discloses how someone else gets in.
+- **Google**, hand-rolled in `src/server/google.ts`: `state` in a short-lived cookie,
+  code swapped for an access token over TLS, then the userinfo endpoint. Because the
+  token arrives straight from Google on a connection only we could open, there is no ID
+  token signature to verify — which removes the part of OAuth that is easy to get subtly
+  wrong. Accounts are matched on the provider's `sub`, **never on email alone**; an email
+  match links only to an account that has itself *verified* that address, because
+  otherwise a Google account could claim someone's unverified one.
+- **Email verification** (`email-tokens.ts`), same token discipline as sessions: random
+  value in the link, SHA-256 in the row. Every failure returns `"invalid"` — unknown,
+  expired, spent and stale-address are one answer, because which one it was is not
+  information a stranger holding a guessed token should get.
+
+Email is **optional and unenforced**: accounts predate it, and blocking unverified ones
+would have locked out every account that existed before this. `RESEND_API_KEY` absent is
+a supported state — the message and its link go to the server console instead, so sign-up
+and verification work end to end in development with no account anywhere.
 
 `src/server/user.ts` turns a request into a `userId`. `getUserContext()` redirects to
 `/login`; `getOptionalUserContext()` returns null. The root layout **must** use the
@@ -92,10 +114,70 @@ descriptions, so they stay findable without implying an endorsement.
 reason *codes*; `src/lib/progression/reasons.ts` is the only place that turns them into
 words, in both locales. Add a code there when you add a rule.
 
+**Feedback is per muscle group, not per exercise** (`SessionMuscleFeedback`, one row per
+`(sessionId, muscleGroupId)`). The four questions are about a muscle — "how sore was your
+chest coming in" has one answer however many chest movements you did — and asking them of
+every exercise produced several answers to the same question, which the engine then read
+as two different accounts of one muscle's recovery while splitting that muscle's volume.
+`prescribe()` still takes feedback as a parameter, so every exercise training a muscle is
+prescribed from that muscle's single answer; the pure engine never knew the difference.
+The logger asks after the *last* exercise of each muscle, in a bottom sheet
+(`src/components/sheet.tsx`) rather than inline — mid-workout a form expanded in the list
+pushes the remaining sets off screen. It **opens itself** the moment every set training
+that muscle is ticked: the answers are what next week is built from, and a prompt you
+have to notice and tap is one the athlete finishes the session without. Only the
+transition fires it — muscles already finished when the screen mounts are seeded as
+asked, so reopening a session is not greeted by a modal, and dismissing it leaves the
+row to tap. Un-ticking a set arms it again.
+
 **Mesocycles are generated one week at a time.** Week 1 is written when the block is
 created; every later week is written by `applyProgression` as the previous one is
 completed — next week's prescription depends on feedback that doesn't exist yet. Don't
 add code that assumes future weeks are already in the database.
+
+**The plan *is* the sessions**, which is why editing one mid-workout needs a scope. Next
+week is generated from this week's entries, so a movement swapped in the logger is
+permanent unless the row says otherwise — the athlete is asked "just today" or "and the
+coming weeks", and `SessionExercise.plan` / `plannedExerciseId` carry the answer.
+`plan` is `"planned"` (do it, carry it), `"extra"` (added today, `applyProgression`
+drops it) or `"skipped"` (kept in the plan, not done today); `plannedExerciseId` is the
+movement a one-off substitution stands in for, and `applyProgression` writes
+`plannedExerciseId ?? exerciseId` into next week. Neither column is copied forward — a
+generated week always starts clean.
+
+A skipped entry **never reaches the engine**: an untouched slot looks exactly like a
+session that produced nothing, and `prescribe()` would cut its sets on the strength of
+work that was never attempted. It is carried over unchanged at the new week's RIR with
+the `skipped_last_week` reason, and it is excluded from `weeklyVolumeByMuscle` because
+the muscle did not receive those sets.
+
+**A completed session is closed to writes, and `reopenSession` is the only way back
+in.** `logSet`, `addSet`, `removeSet`, `saveFeedback` and the three edit actions all
+call `assertSessionOpen` — the ownership guards return the session's status so it costs
+no extra read. Editing a finished session in place left its numbers and the week they
+produced disagreeing, with nothing to notice.
+
+Reopening deletes the week this session generated, because finishing again writes it
+afresh from the corrected numbers — so it is refused once that week has been started,
+and the athlete is told why rather than losing real sets to a correction. `clear` also
+wipes the log and returns the session to `planned`, keeping the prescribed load (that is
+the plan, not a record). Reopening a final-week session puts the *block* back to
+`active`: it was marked completed by whichever final-week session was finished first.
+
+**Deleting a session is deliberately not offered.** The block is a chain — Week 3 Day 1
+exists because Week 2 Day 1 was finished — so removing a link leaves that day unable to
+ever produce another session. Reopening rewinds the chain instead of cutting it.
+
+**Achievements are never revoked**, only re-evaluated. An unlock row records that it
+happened, and correcting a typo does not un-happen it; the alternative punishes the one
+behaviour you want. It also makes re-finishing idempotent.
+
+Swaps are **within a muscle group only**. The slot carries that muscle's volume and the
+engine reasons about volume per muscle; a chest slot that quietly became a biceps one
+moves a week's sets between two sets of landmarks with nothing saying so. All three
+edits also refuse once a set is ticked on the entry — substituting under logged numbers
+files them against a lift that never did them, and `getPreviousPerformance` keys on the
+exercise, so the corrupted comparison outlives the session.
 
 **Both writers batch, and they have to.** Creating a block or a week means dozens of
 rows; as one round-trip each inside `$transaction` that overran Prisma's 5s interactive
@@ -189,6 +271,33 @@ A declined row is kept rather than deleted, and the unique constraint on
 it would turn "no" into a button someone can press daily. Removing a friend *does*
 delete the row, because that is not a "no" that needs remembering.
 
+`friendProfile()` is the one read that takes a **username from the URL**, so it resolves
+the account and then checks the friendship itself — the page cannot be trusted to do it,
+because this is the function that touches the rows. A username that is not an accepted
+friend (including the athlete's own) returns null and the route 404s. It lists only
+*earned* medals: `achievementSummary` also returns the locked ones with progress toward
+every threshold, which would hand over a reconstruction of their whole training profile
+rather than the highlights they agreed to share.
+
+`leaderboard()` covers the viewer and their accepted friends only — there is no global
+board, because a stranger's total is not something either of you agreed to share. It
+sums the snapshotted `points` column, which is the reason that column exists, and
+returns **both windows from one pass**: all-time and the current month, split in memory
+rather than asked of the database twice. The month filters on `unlockedAt` — a medal is
+a thing that happened on a day — not on replaying what someone would have earned by a
+date.
+
+The shape and the sort live in `src/lib/standings.ts`, not in `friends.ts`, because
+`src/components/standings.tsx` is a client component and importing anything from
+`src/server/` drags `server-only` (and Prisma behind it) into the browser bundle. The
+period toggle is local state for the same reason it is worth having: both windows are
+already on the device, so switching is a re-sort, not a round trip. Routing it through a
+search param re-fetched the whole page to change one section and lost the reader's place
+— the standings sit mid-screen, and `scroll={false}` did not hold position across it.
+
+`rankBy` ties on sessions before falling back to the username. Medals are milestones, so
+most months nobody crosses one; without that tiebreak the monthly board is alphabetical.
+
 The feed is derived from the training data, not written to an events table: nothing to
 backfill, nothing to keep in sync, and a session that is edited or deleted stops being
 in the feed because it stops being true. Two reads merged in memory beats an append-only
@@ -231,6 +340,49 @@ The visual register borrows the category's vocabulary — near-black, one signal
 condensed caps — and none of anyone's identity. Don't import a competitor's mark,
 wordmark, brand colour or typeface, and don't describe the app as affiliated with the
 Renaissance Periodization people whose method it implements.
+
+## The landing page lives in `landing/`
+
+It is a **separate Next project in this repository**, deployed on its own to
+meso505.com while the app takes app.meso505.com. It has no Prisma, no session
+and no server actions — the only thing it knows about the app is its URL, in
+`NEXT_PUBLIC_APP_URL`. Don't reach into `src/` from it, and don't add a route to
+it here; `landing/README.md` is its own documentation.
+
+Two consequences for this project:
+
+- `tsconfig.json` excludes `landing`, and `eslint.config.mjs` ignores it. Both
+  have their own copies in there. Without the exclusions the app compiles the
+  landing site with its own `@/*` mapping and every import fails.
+- `globals.css` and `logo.tsx` are **vendored** into it. A token or a mark
+  changed here has to be changed there too — the same rule that already applies
+  to `public/icon.svg`, `public/icon-maskable.svg` and `src/app/icon.svg`.
+
+Nothing on that page claims a user count, a testimonial or a rating, and every
+figure on it is a fact about the product that can be checked in this repository.
+Keep it that way.
+
+**A person is an `Avatar` and a `PersonName`** (`src/components/avatar.tsx`) — name on
+top, `@username` under it, everywhere someone is listed. The avatar is initials, not a
+colour-coded disc: identity colour is decorative colour, and a row of tinted circles on
+this canvas competes with the one accent that means "live". It is drawn rather than
+fetched, so rendering a friend's row sends no viewer's IP to a third-party host.
+`initialsFor` lives in `src/lib/initials.ts`, pure and tested, because every edge case is
+in the string. The standings podium takes its three metals from `TIER_INK` in
+`medal.tsx` rather than a second set of hexes.
+
+**Charts are drawn by hand** (`src/components/chart.tsx`) — the app ships no webfont and
+no third-party bundle, and a charting library would outweigh the whole progress screen
+and still need overriding to reach the palette. They carry no gridlines, axes or legend:
+the figure beside the shape is the reading, and the accent marks only the live value.
+`Sparkline` returns null below two points and centres a flat series (scaling it against
+a zero span puts a lift that has not moved along the floor, which reads as a collapse);
+`BarChart` gives a zero-value session a visible sliver so a rest day and a missing bar
+are not the same picture.
+
+**Any screen the bottom nav cannot reach needs `ScreenHeader back=`.** `/achievements`,
+`/friends` and `/friends/[username]` live under `(tabs)` for the layout but have no tab,
+so no tab is ever marked current and without the chevron they are dead ends.
 
 Numbers are the hero: `tabular-nums` is on globally so figures don't reflow mid-set,
 and the `text-display` / `Stat` sizes are tuned for figures rather than prose.

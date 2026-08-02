@@ -6,10 +6,10 @@ import { getOptionalUserContext } from "@/server/user";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "MesoPilot",
+  title: "Meso505",
   description: "Adaptive hypertrophy programming. Your next week is written from the last one.",
   manifest: "/manifest.webmanifest",
-  appleWebApp: { capable: true, statusBarStyle: "black-translucent", title: "MesoPilot" },
+  appleWebApp: { capable: true, statusBarStyle: "black-translucent", title: "Meso505" },
 };
 
 /**
@@ -21,7 +21,7 @@ export const dynamic = "force-dynamic";
 
 export const viewport: Viewport = {
   colorScheme: "dark",
-  themeColor: "#0b0b0c",
+  themeColor: "#060607",
   width: "device-width",
   initialScale: 1,
   // The app is a set logger, not a document — pinch-zooming it only ever
@@ -47,7 +47,12 @@ export default async function RootLayout({
 
   return (
     <html lang={locale === "pt" ? "pt-BR" : "en"} className="h-full antialiased">
-      <body className="min-h-full bg-canvas text-ink">
+      {/* No background here: `html` already paints the canvas in globals.css,
+          and a second one on `body` is not merely redundant. Body's background
+          paints *after* negative z-index descendants, so it covered every
+          `-z-10` layer in the tree — glows, and the illustrations behind the
+          landing page's phones. */}
+      <body className="min-h-full text-ink">
         <I18nProvider locale={locale} unit={unit}>
           {children}
         </I18nProvider>

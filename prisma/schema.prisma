@@ -28,9 +28,22 @@ model User {
   username      String @unique
   usernameLower String @unique
 
+  /// Optional: accounts predate email, and a Google sign-in supplies one only
+  /// if the athlete consents to share it. `emailLower` is what lookups match
+  /// on, for the same reason `usernameLower` exists.
+  email      String? @unique
+  emailLower String? @unique
+
+  /// Null until the athlete clicks the link. Unverified accounts still work —
+  /// blocking them would have locked out every account that predates this.
+  emailVerifiedAt DateTime?
+
   /// scrypt, as `salt:derivedKey` in hex. Never a plaintext password, and never
   /// selected into anything that reaches a client component.
-  passwordHash String
+  ///
+  /// Nullable: an account created through Google has no password, and inventing
+  /// a random one it can never use would be worse than saying so.
+  passwordHash String?
 
   locale    String   @default("en") // Locale: "en" | "pt"
   unit      String   @default("kg") // WeightUnit: "kg" | "lb"
@@ -48,6 +61,60 @@ model User {
 
   friendRequestsSent     Friendship[] @relation("FriendshipRequester")
   friendRequestsReceived Friendship[] @relation("FriendshipAddressee")
+
+  oauthAccounts OAuthAccount[]
+  emailTokens   EmailToken[]
+}
+
+/// A sign-in provider linked to an account.
+///
+/// Separate from `User` so one athlete can hold several — a Google login added
+/// to an existing password account, rather than a second account with the same
+/// person in it.
+model OAuthAccount {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// "google" for now. A string rather than an enum, like everything else here.
+  provider String
+
+  /// The provider's own stable id for the person — `sub` for Google. Matching
+  /// on this rather than on email is what stops a changed or recycled address
+  /// handing someone else's account over.
+  providerAccountId String
+
+  /// What the provider said the address was, kept for support questions only.
+  email String?
+
+  createdAt DateTime @default(now())
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+}
+
+/// A single-use link sent by email.
+model EmailToken {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// SHA-256 of the value in the link, never the value — same reasoning as
+  /// `AuthSession.tokenHash`: a database dump must not be a book of live links.
+  tokenHash String @unique
+
+  /// EmailTokenPurpose: "verify" for now; password reset will reuse this table.
+  purpose String
+
+  /// The address this token was issued for. Verifying checks it still matches
+  /// the account, so changing your email cancels any link already in flight.
+  email String
+
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId, purpose])
 }
 
 /// A connection between two athletes, and the consent behind it.
@@ -180,6 +247,7 @@ model MuscleGroup {
   landmarks        UserMuscleLandmark[]
   templateSlots    ProgramTemplateSlot[]
   sessionExercises SessionExercise[]
+  sessionFeedback  SessionMuscleFeedback[]
 }
 
 /// Per-user calibration of the landmarks above. Written by the engine as it
@@ -242,6 +310,8 @@ model Exercise {
 
   templateSlots    ProgramTemplateSlot[]
   sessionExercises SessionExercise[]
+  /// Rows whose plan is this exercise while today runs a substitute.
+  plannedFor       SessionExercise[] @relation("PlannedExercise")
 }
 
 // ------------------------------------------------------------- templates
@@ -395,9 +465,36 @@ model Session {
   completedAt  DateTime?
   notes        String?
 
-  entries SessionExercise[]
+  entries  SessionExercise[]
+  feedback SessionMuscleFeedback[]
 
   @@unique([mesocycleId, week, dayIndex])
+}
+
+/// Autoregulation feedback, asked once per muscle group per session.
+///
+/// The four questions are about a *muscle*, not a movement: "how sore was your
+/// chest coming in" has one answer however many chest exercises you did. Asking
+/// per exercise produced several answers to the same question — and when they
+/// disagreed, the engine read the same muscle's recovery two different ways
+/// while deciding how to split that muscle's volume.
+model SessionMuscleFeedback {
+  id        String  @id @default(cuid())
+  sessionId String
+  session   Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  muscleGroupId String
+  muscleGroup   MuscleGroup @relation(fields: [muscleGroupId], references: [id], onDelete: Cascade)
+
+  soreness  Int // 0 never sore .. 3 still sore
+  pump      Int // 0 low .. 2 amazing
+  workload  Int // 0 easy .. 3 too much
+  jointPain Int // 0 none .. 2 a lot
+
+  answeredAt DateTime @default(now())
+
+  @@unique([sessionId, muscleGroupId])
+  @@index([sessionId])
 }
 
 model SessionExercise {
@@ -411,17 +508,27 @@ model SessionExercise {
   muscleGroupId String
   muscleGroup   MuscleGroup @relation(fields: [muscleGroupId], references: [id], onDelete: Cascade)
 
+  /// How this row relates to the plan. The plan *is* the sessions — next week
+  /// is generated from this week's entries — so an edit made mid-workout is a
+  /// permanent one unless the row says otherwise. EntryPlan in lib/types.ts.
+  ///   "planned" — do it today, carry it forward.
+  ///   "extra"   — added for today only; next week does not inherit it.
+  ///   "skipped" — kept in the plan, not being done today.
+  plan String @default("planned")
+
+  /// Set when a movement was substituted *for today only*: the athlete trains
+  /// `exerciseId`, and the week generated from this one goes back to this.
+  plannedExerciseId String?
+  plannedExercise   Exercise? @relation("PlannedExercise", fields: [plannedExerciseId], references: [id], onDelete: SetNull)
+
   targetSets Int
   repMin     Int
   repMax     Int
   targetRir  Int
   restSec    Int @default(120)
 
-  // Post-exercise autoregulation feedback. Null until the user answers.
-  soreness  Int? // 0 never sore .. 3 still sore
-  pump      Int? // 0 low .. 2 amazing
-  workload  Int? // 0 easy .. 3 too much
-  jointPain Int? // 0 none .. 2 a lot
+  // Feedback lives on SessionMuscleFeedback, one row per muscle per session —
+  // it was here once, which meant asking the same question of every exercise.
 
   aiNote String?
 

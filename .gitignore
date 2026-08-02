@@ -48,3 +48,12 @@ yarn-error.log*
 next-env.d.ts
 
 /src/generated/prisma
+
+# Landing-page photo originals (~10 MB). The served crops in public/photos are
+# committed; these are only needed to regenerate them, and the Unsplash IDs in
+# the filenames are recorded in public/photos/README.md so they can be re-fetched.
+assets/photos-src/
+
+# The landing site is a separate project with its own lockfile and build.
+landing/node_modules/
+landing/.next/

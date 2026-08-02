@@ -150,6 +150,7 @@ async function loadSessionForCoach(sessionId: string) {
           decisions: { orderBy: { createdAt: "desc" }, take: 1 },
         },
       },
+      feedback: { include: { muscleGroup: true } },
     },
   });
 }
@@ -161,17 +162,27 @@ function describeCompletedSession(session: SessionForCoach, locale: Locale): str
       .map((set) => `${formatWeight(set.weightKg, "kg")}kg x ${set.reps ?? "?"} @ ${set.rir ?? "?"} RIR`)
       .join(", ");
 
-    const feedback = [
-      `soreness ${entry.soreness ?? "n/a"}/3`,
-      `pump ${entry.pump ?? "n/a"}/2`,
-      `workload ${entry.workload ?? "n/a"}/3`,
-      `joint pain ${entry.jointPain ?? "n/a"}/2`,
-    ].join(", ");
+    // A skipped exercise says so. Left as "nothing logged" it reads as a lift
+    // the athlete failed rather than one they chose not to do today.
+    const performed = entry.plan === "skipped" ? "skipped today" : sets || "nothing logged";
 
-    return `- ${localized(entry.exercise, locale)} (${localized(entry.exercise.muscleGroup, locale)}): target ${entry.targetSets}x${entry.repMin}-${entry.repMax} @ ${entry.targetRir} RIR. Performed: ${sets || "nothing logged"}. Feedback: ${feedback}.`;
+    return `- ${localized(entry.exercise, locale)} (${localized(entry.exercise.muscleGroup, locale)}): target ${entry.targetSets}x${entry.repMin}-${entry.repMax} @ ${entry.targetRir} RIR. Performed: ${performed}.`;
   });
 
-  return lines.join("\n");
+  // Feedback is answered per muscle, not per movement, so it is described that
+  // way. Repeating one muscle's answer against each of its exercises reads as
+  // several independent reports that happen to agree.
+  const feedback = session.feedback.map(
+    (row) =>
+      `- ${localized(row.muscleGroup, locale)}: soreness ${row.soreness}/3, pump ${row.pump}/2, workload ${row.workload}/3, joint pain ${row.jointPain}/2.`,
+  );
+
+  return [
+    lines.join("\n"),
+    "",
+    "Feedback by muscle group:",
+    feedback.length > 0 ? feedback.join("\n") : "- none given",
+  ].join("\n");
 }
 
 function describePrescription(session: SessionForCoach, locale: Locale): string {

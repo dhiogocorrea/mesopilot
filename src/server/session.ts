@@ -16,10 +16,12 @@ export async function getSessionDetail(sessionId: string, userId: string) {
         orderBy: { order: "asc" },
         include: {
           exercise: { include: { muscleGroup: true } },
+          plannedExercise: true,
           sets: { orderBy: { order: "asc" } },
           decisions: { orderBy: { createdAt: "desc" }, take: 1 },
         },
       },
+      feedback: true,
     },
   });
 }
@@ -105,8 +107,18 @@ export function countLoggedSets(session: SessionDetail): number {
   );
 }
 
-/** An exercise needs feedback once its sets are done but the questions are not. */
-export function needsFeedback(entry: SessionEntry): boolean {
-  const hasLoggedSets = entry.sets.some((set) => set.completed);
-  return hasLoggedSets && entry.workload === null;
+/**
+ * Muscle groups this session trained but never asked about. Feedback is per
+ * muscle, so a session with four chest exercises and no answer is one gap, not
+ * four.
+ */
+export function musclesMissingFeedback(session: SessionDetail): string[] {
+  const answered = new Set(session.feedback.map((row) => row.muscleGroupId));
+  const trained = new Set(
+    session.entries
+      .filter((entry) => entry.sets.some((set) => set.completed))
+      .map((entry) => entry.muscleGroupId),
+  );
+
+  return [...trained].filter((muscleGroupId) => !answered.has(muscleGroupId));
 }
