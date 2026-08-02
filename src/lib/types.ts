@@ -7,6 +7,9 @@ export const LOCALES = ["en", "pt"] as const;
 export type Locale = (typeof LOCALES)[number];
 export const DEFAULT_LOCALE: Locale = "en";
 
+/** Cookie holding the language for a browser we have not identified yet. */
+export const LOCALE_COOKIE = "m505_locale";
+
 export function isLocale(value: unknown): value is Locale {
   return typeof value === "string" && (LOCALES as readonly string[]).includes(value);
 }

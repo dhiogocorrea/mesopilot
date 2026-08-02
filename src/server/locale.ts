@@ -3,7 +3,7 @@
 import { cookies } from "next/headers";
 import { revalidatePath } from "next/cache";
 
-import { DEFAULT_LOCALE, isLocale, type Locale } from "@/lib/types";
+import { DEFAULT_LOCALE, isLocale, LOCALE_COOKIE, type Locale } from "@/lib/types";
 
 /**
  * Language before there is an account.
@@ -15,7 +15,6 @@ import { DEFAULT_LOCALE, isLocale, type Locale } from "@/lib/types";
  * in the language they picked.
  */
 
-const LOCALE_COOKIE = "m505_locale";
 const ONE_YEAR = 60 * 60 * 24 * 365;
 
 export async function getPreferredLocale(): Promise<Locale> {
