@@ -12,8 +12,6 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
-    // The landing site lints itself, with its own config.
-    "landing/**",
   ]),
 ]);
 

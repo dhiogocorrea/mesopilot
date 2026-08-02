@@ -341,19 +341,17 @@ condensed caps — and none of anyone's identity. Don't import a competitor's ma
 wordmark, brand colour or typeface, and don't describe the app as affiliated with the
 Renaissance Periodization people whose method it implements.
 
-## The landing page lives in `landing/`
+## The landing page lives in the sibling `meso505-site/` project
 
-It is a **separate Next project in this repository**, deployed on its own to
-meso505.com while the app takes app.meso505.com. It has no Prisma, no session
-and no server actions — the only thing it knows about the app is its URL, in
-`NEXT_PUBLIC_APP_URL`. Don't reach into `src/` from it, and don't add a route to
-it here; `landing/README.md` is its own documentation.
+It is a **separate Next project in its own directory** (`../meso505-site`),
+deployed on its own to meso505.com while the app takes app.meso505.com. It has
+no Prisma, no session and no server actions — the only thing it knows about the
+app is its URL, in `NEXT_PUBLIC_APP_URL`. It lives entirely outside this project
+now, so it has no bearing on this app's `tsconfig.json` or `eslint.config.mjs`;
+`meso505-site/README.md` is its own documentation.
 
-Two consequences for this project:
+One consequence for this project:
 
-- `tsconfig.json` excludes `landing`, and `eslint.config.mjs` ignores it. Both
-  have their own copies in there. Without the exclusions the app compiles the
-  landing site with its own `@/*` mapping and every import fails.
 - `globals.css` and `logo.tsx` are **vendored** into it. A token or a mark
   changed here has to be changed there too — the same rule that already applies
   to `public/icon.svg`, `public/icon-maskable.svg` and `src/app/icon.svg`.
