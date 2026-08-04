@@ -2,6 +2,7 @@ import "server-only";
 
 import { db } from "@/lib/db";
 import { renderReasons } from "@/lib/progression/reasons";
+import { allocateSets, type AllocatableExercise } from "@/lib/progression/allocate";
 import {
   isDeloadWeek,
   prescribe,
@@ -54,6 +55,8 @@ export async function applyProgression(
     nutritionQuality: number;
     caloricState: "deficit" | "maintenance" | "surplus";
   },
+  /** What the athlete said they have per session. Bounds volume growth. */
+  sessionMinutes: number,
 ): Promise<ProgressionSummary> {
   const session = await db.session.findUnique({
     where: { id: sessionId },
@@ -112,6 +115,42 @@ export async function applyProgression(
   // An exercise added for today only stops here — the plan never had it, so the
   // week generated from this one does not inherit it.
   const carried = session.entries.filter((entry) => entry.plan !== "extra");
+
+  /**
+   * Sets are decided for the whole session at once, not exercise by exercise.
+   * A muscle earns volume from its one feedback answer, and that has to be
+   * split across however many movements trained it — asking each of them
+   * separately spent the same weekly budget over and over, and the ceiling that
+   * was supposed to hold at MRV did not. The allocator also prices the session
+   * against the clock, so growth stops at the time the athlete actually has.
+   *
+   * Deload weeks skip it: the prescription there is "halve everything", which
+   * has nothing to negotiate.
+   */
+  const allocation = isDeloadWeek(nextWeek, mesocycle.weeks)
+    ? null
+    : allocateSets({
+        exercises: carried.map(
+          (entry): AllocatableExercise => ({
+            key: entry.id,
+            muscleGroupId: entry.muscleGroupId,
+            currentSets: entry.targetSets,
+            restSec: entry.restSec,
+            sfr: entry.exercise.sfr,
+            frozen: entry.plan === "skipped",
+          }),
+        ),
+        muscles: [...new Set(carried.map((entry) => entry.muscleGroupId))].map(
+          (muscleGroupId) => ({
+            muscleGroupId,
+            weeklyVolume: weeklyVolume.get(muscleGroupId) ?? 0,
+            landmarks: landmarks.get(muscleGroupId) ?? { mev: 8, mav: 16, mrv: 22 },
+            feedback: feedbackByMuscle.get(muscleGroupId) ?? UNANSWERED,
+          }),
+        ),
+        recovery,
+        budgetMinutes: sessionMinutes,
+      });
 
   const prescriptions = carried.map((entry) => {
     const performed: PerformedSet[] = entry.sets
@@ -180,6 +219,7 @@ export async function applyProgression(
       movementType: entry.exercise.movementType as MovementType,
       isLowerBody: isLowerBody(entry.exercise.muscleGroup.key),
       unit,
+      allocation: allocation?.byKey.get(entry.id),
     });
 
     return {

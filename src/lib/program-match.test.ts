@@ -16,16 +16,33 @@ const PREFS: TrainingPreferences = {
 };
 
 function program(overrides: Partial<ProgramFacts> = {}): ProgramFacts {
-  return {
+  const base = {
     daysPerWeek: 4,
     estimatedMinutes: 60,
-    level: "intermediate",
-    goal: "hypertrophy",
+    level: "intermediate" as const,
+    goal: "hypertrophy" as const,
     ...overrides,
   };
+  // A program that never grows is the simplest case, so unless a test says
+  // otherwise the peak is the opening length.
+  return { ...base, peakMinutes: overrides.peakMinutes ?? base.estimatedMinutes };
 }
 
 describe("matchProgram", () => {
+  it("judges the time budget on where the program ends up, not where it starts", () => {
+    // The trap this replaced: a block opening at 40 minutes against an hour
+    // looks like a comfortable fit, and is — for one week. The engine then
+    // grows it to 85 and the athlete has already committed to the block.
+    const grows = program({ estimatedMinutes: 40, peakMinutes: 85 });
+
+    assert.equal(grows.estimatedMinutes < PREFS.sessionMinutes, true, "week one fits");
+    assert.equal(matchProgram(grows, PREFS).fits, false, "the block does not");
+    assert.equal(matchProgram(grows, PREFS).minuteDelta, 25);
+
+    // One that genuinely stays inside the hour still matches.
+    assert.equal(matchProgram(program({ estimatedMinutes: 40, peakMinutes: 58 }), PREFS).fits, true);
+  });
+
   it("scores a perfect match on every factor", () => {
     const match = matchProgram(program(), PREFS);
     assert.equal(match.score, 100);

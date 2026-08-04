@@ -1,4 +1,5 @@
 import { Avatar } from "@/components/avatar";
+import { InstallSection } from "@/components/install-prompt";
 import { ResetTrainingButton } from "@/components/reset-training-button";
 import { SettingsForm } from "@/components/settings-form";
 import { SignOutButton } from "@/components/sign-out-button";
@@ -68,6 +69,10 @@ export default async function SettingsPage() {
             </Chip>
           </div>
         </Section>
+
+        {/* Section and all: it removes itself on a device that is already
+            installed, or one that cannot install at all. */}
+        <InstallSection />
 
         <Section label={t("settings.account")}>
           <p className="text-[13px] text-ink-3">{t("settings.signedInAs", { username })}</p>

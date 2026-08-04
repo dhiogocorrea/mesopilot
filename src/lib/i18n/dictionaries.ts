@@ -384,6 +384,16 @@ export const en = {
   "settings.signedInAs": "Signed in as {username}",
   "settings.signOut": "Sign out",
 
+  "settings.app": "App",
+
+  "install.title": "Add to home screen",
+  "install.body": "Opens full screen, without the browser bar — and lands one tap away between sets.",
+  "install.rowBody": "Keep Meso505 on your home screen.",
+  "install.action": "Install",
+  "install.iosShare": "Tap the Share button in Safari's toolbar.",
+  "install.iosAdd": "Scroll down and choose “Add to Home Screen”.",
+  "install.iosConfirm": "Tap “Add”. Meso505 appears with your other apps.",
+
   "auth.tagline": "Adaptive hypertrophy programming. Your next week is written from the last one.",
   "auth.signIn": "Sign in",
   "auth.signUp": "Sign up",
@@ -872,6 +882,16 @@ export const pt: Dictionary = {
   "settings.account": "Conta",
   "settings.signedInAs": "Conectado como {username}",
   "settings.signOut": "Sair",
+
+  "settings.app": "Aplicativo",
+
+  "install.title": "Adicionar à tela de início",
+  "install.body": "Abre em tela cheia, sem a barra do navegador — e fica a um toque de distância entre as séries.",
+  "install.rowBody": "Deixe o Meso505 na sua tela de início.",
+  "install.action": "Instalar",
+  "install.iosShare": "Toque no botão Compartilhar na barra do Safari.",
+  "install.iosAdd": "Role para baixo e escolha “Adicionar à Tela de Início”.",
+  "install.iosConfirm": "Toque em “Adicionar”. O Meso505 aparece junto dos seus apps.",
 
   "auth.tagline": "Programação adaptativa de hipertrofia. Sua próxima semana nasce da anterior.",
   "auth.signIn": "Entrar",

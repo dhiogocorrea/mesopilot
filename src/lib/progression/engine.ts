@@ -101,11 +101,28 @@ export type SetDecision = {
 };
 
 const MAX_SETS_ADDED_PER_SESSION = 2;
-const MIN_SETS = 1;
-const MAX_SETS_PER_EXERCISE = 8;
+export const MIN_SETS = 1;
+export const MAX_SETS_PER_EXERCISE = 8;
 
-export function decideSets(input: SetDecisionInput): SetDecision {
-  const { currentSets, feedback, weeklyVolume, landmarks, recovery } = input;
+/** The set change a *muscle* earned, before it is split across exercises. */
+export type SetDelta = {
+  delta: number;
+  reasons: Reason[];
+  suggestSwap: boolean;
+  suggestDeload: boolean;
+};
+
+/**
+ * How many sets this muscle group has earned, from its one feedback answer.
+ *
+ * Deliberately knows nothing about exercises. Feedback is per muscle, the
+ * landmarks are per muscle, and the ceiling that matters — MRV — is a weekly
+ * total for the muscle; asking this question once per *exercise* is what let
+ * four back movements each independently decide there was room for one more
+ * set. `allocate.ts` takes this number and decides who gets it.
+ */
+export function earnedSetDelta(input: Omit<SetDecisionInput, "currentSets">): SetDelta {
+  const { feedback, weeklyVolume, landmarks, recovery } = input;
   const reasons: Reason[] = [];
 
   const hasFeedback =
@@ -115,13 +132,7 @@ export function decideSets(input: SetDecisionInput): SetDecision {
 
   if (!hasFeedback) {
     reasons.push({ code: "no_feedback" });
-    return {
-      sets: currentSets,
-      delta: 0,
-      reasons,
-      suggestSwap: false,
-      suggestDeload: false,
-    };
+    return { delta: 0, reasons, suggestSwap: false, suggestDeload: false };
   }
 
   let score = 0;
@@ -209,13 +220,34 @@ export function decideSets(input: SetDecisionInput): SetDecision {
     reasons.push({ code: "below_mev" });
   }
 
-  // The ceiling stops volume climbing past what is productive, but it must not
-  // force a cut on a program that deliberately starts above it — 10x10
-  // protocols progress by adding load, not sets.
-  const ceiling = Math.max(MAX_SETS_PER_EXERCISE, currentSets);
-  const sets = Math.min(ceiling, Math.max(MIN_SETS, currentSets + delta));
+  return { delta, reasons, suggestSwap, suggestDeload };
+}
 
+/**
+ * One exercise's set count, when it is the only thing training its muscle.
+ *
+ * Retained because that case is real — a muscle with a single movement in the
+ * session — and because it is the shape the engine's tests describe. Anything
+ * with several exercises on one muscle must go through `allocateSets` instead,
+ * or each of them spends the same weekly budget over again.
+ */
+export function decideSets(input: SetDecisionInput): SetDecision {
+  const { currentSets } = input;
+  const { delta, reasons, suggestSwap, suggestDeload } = earnedSetDelta(input);
+
+  const sets = clampSets(currentSets, delta);
   return { sets, delta: sets - currentSets, reasons, suggestSwap, suggestDeload };
+}
+
+/**
+ * The per-exercise floor and ceiling. The ceiling stops volume climbing past
+ * what is productive, but it must not force a cut on a program that
+ * deliberately starts above it — 10x10 protocols progress by adding load, not
+ * sets, so the ceiling yields to whatever the exercise already carries.
+ */
+export function clampSets(currentSets: number, delta: number): number {
+  const ceiling = Math.max(MAX_SETS_PER_EXERCISE, currentSets);
+  return Math.min(ceiling, Math.max(MIN_SETS, currentSets + delta));
 }
 
 /** Deloads cut volume roughly in half — enough to shed fatigue, not fitness. */
@@ -352,6 +384,13 @@ export type PrescriptionInput = {
   movementType: MovementType;
   isLowerBody: boolean;
   unit: WeightUnit;
+  /**
+   * Set count already decided for this exercise by `allocateSets`, which sees
+   * the whole session and can therefore honour the muscle's weekly ceiling and
+   * the athlete's clock. Omit it only when this exercise is the sole movement
+   * training its muscle; without it, sets are decided here in isolation.
+   */
+  allocation?: SetDelta & { sets: number };
 };
 
 export type Prescription = {
@@ -389,13 +428,15 @@ export function prescribe(input: PrescriptionInput): Prescription {
     };
   }
 
-  const setDecision = decideSets({
-    currentSets: input.currentSets,
-    feedback: input.feedback,
-    weeklyVolume: input.weeklyVolume,
-    landmarks: input.landmarks,
-    recovery: input.recovery,
-  });
+  const setDecision: SetDecision = input.allocation
+    ? { ...input.allocation, delta: input.allocation.sets - input.currentSets }
+    : decideSets({
+        currentSets: input.currentSets,
+        feedback: input.feedback,
+        weeklyVolume: input.weeklyVolume,
+        landmarks: input.landmarks,
+        recovery: input.recovery,
+      });
 
   const loadDecision = decideLoad({
     lastSets: input.lastSets,

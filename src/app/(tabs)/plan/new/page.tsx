@@ -1,6 +1,7 @@
 import { TrackPicker, type BlockOption, type TrackOption } from "@/components/track-picker";
 import { ScreenHeader } from "@/components/ui";
 import { createTranslator, localized, localizedDescription, localizedLabel } from "@/lib/i18n";
+import { projectMinuteRange } from "@/lib/progression/project";
 import { programOrigin, type Experience, type Goal } from "@/lib/types";
 import { listTemplates, type TemplateWithDays } from "@/server/mesocycle";
 import { listTracks } from "@/server/track";
@@ -76,6 +77,21 @@ function toBlock(template: TemplateWithDays, locale: Locale): BlockOption {
     daysPerWeek: template.daysPerWeek,
     weeks: template.weeks,
     estimatedMinutes: template.estimatedMinutes,
+    // Projected here rather than stored: `estimatedMinutes` is a column written
+    // at seed time from the starting sets, and the number that decides whether
+    // a program fits is the one it grows into. Computed from the same slots the
+    // picker already loaded, so it costs no extra read and cannot go stale.
+    peakMinutes: projectMinuteRange(
+      template.days.map((day) =>
+        day.slots.map((slot) => ({
+          muscleGroupId: slot.muscleGroupId,
+          sets: slot.startingSets,
+          restSec: slot.restSec,
+          sfr: slot.exercise.sfr,
+        })),
+      ),
+      template.weeks,
+    ).peak,
     // Stock blocks are shipped with the app, so they are copied rather than
     // changed in place; anything the athlete owns is edited directly.
     editable: template.isCustom,
@@ -101,6 +117,7 @@ function toTrack(
     TrackOption,
     | "daysPerWeek"
     | "estimatedMinutes"
+    | "peakMinutes"
     | "minDaysPerWeek"
     | "maxDaysPerWeek"
     | "minEstimatedMinutes"
@@ -109,17 +126,22 @@ function toTrack(
   >,
 ): TrackOption {
   const days = track.blocks.map((block) => block.daysPerWeek);
-  const minutes = track.blocks.map((block) => block.estimatedMinutes);
+  // Opening length of the shortest block through to the peak of the longest —
+  // the honest span of what the athlete is signing up for, rather than the
+  // span of week-one figures, which every block leaves behind by week three.
+  const opening = track.blocks.map((block) => block.estimatedMinutes);
+  const peaks = track.blocks.map((block) => block.peakMinutes);
   const first = track.blocks[0]!;
 
   return {
     ...track,
     daysPerWeek: first.daysPerWeek,
     estimatedMinutes: first.estimatedMinutes,
+    peakMinutes: first.peakMinutes,
     minDaysPerWeek: Math.min(...days),
     maxDaysPerWeek: Math.max(...days),
-    minEstimatedMinutes: Math.min(...minutes),
-    maxEstimatedMinutes: Math.max(...minutes),
+    minEstimatedMinutes: Math.min(...opening),
+    maxEstimatedMinutes: Math.max(...peaks),
     totalWeeks: track.blocks.reduce((total, block) => total + block.weeks, 0),
   };
 }

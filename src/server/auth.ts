@@ -84,24 +84,40 @@ export async function endSession(): Promise<void> {
 }
 
 /**
- * The signed-in user's id, or null. `cache` dedupes it across one render pass
- * so a page with five server components still makes one query.
+ * The signed-in user and their profile, or null.
+ *
+ * One query, deliberately. The session row, the account it belongs to and that
+ * account's profile are a join, and resolving them as three separate awaits
+ * made *every request in the app* wait out three round trips before any page
+ * code began — which is most of a second against a database on another
+ * continent. Reaching through `user` here is the one place auth knows anything
+ * about the account, and it is still the only place that knows sessions exist.
+ *
+ * `cache` dedupes it across one render pass, so a page with five server
+ * components still makes one query.
  */
-export const currentUserId = cache(async (): Promise<string | null> => {
+export const currentAuthUser = cache(async () => {
   const store = await cookies();
   const token = store.get(SESSION_COOKIE)?.value;
   if (!token) return null;
 
   const session = await db.authSession.findUnique({
     where: { tokenHash: hashToken(token) },
-    select: { userId: true, expiresAt: true },
+    include: { user: { include: { profile: true } } },
   });
 
   // Expiry is enforced here rather than trusted from the cookie, which the
   // browser owns and a caller can replay after it "expires".
   if (!session || session.expiresAt < new Date()) return null;
 
-  return session.userId;
+  // `user` is a required relation with `onDelete: Cascade`, so a session whose
+  // account is gone is not a state the database can be in.
+  return session.user;
+});
+
+/** Just the id, sharing the query above rather than issuing a second one. */
+export const currentUserId = cache(async (): Promise<string | null> => {
+  return (await currentAuthUser())?.id ?? null;
 });
 
 /** Sessions are only cleaned up opportunistically; nothing depends on it. */

@@ -4,7 +4,7 @@ import { cache } from "react";
 import { redirect } from "next/navigation";
 
 import { db } from "@/lib/db";
-import { currentUserId } from "./auth";
+import { currentAuthUser } from "./auth";
 import type { TrainingPreferences } from "@/lib/program-match";
 import {
   isLocale,
@@ -45,15 +45,9 @@ export type UserContext = {
  * instead of each issuing its own.
  */
 export const getOptionalUserContext = cache(async (): Promise<UserContext | null> => {
-  const userId = await currentUserId();
-  if (!userId) return null;
-
-  const user = await db.user.findUnique({
-    where: { id: userId },
-    include: { profile: true },
-  });
-
-  // The session outlived its account — a deleted user, or a restored database.
+  // The account arrives with the session it was resolved from — one query for
+  // the pair rather than one each. See `currentAuthUser`.
+  const user = await currentAuthUser();
   if (!user) return null;
 
   const profile = user.profile;

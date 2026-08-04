@@ -7,9 +7,21 @@
 //
 // All loads are stored in kilograms. Display units are a per-user preference.
 
+/// `relationJoins` makes `join` the default relation load strategy on Postgres,
+/// which is the single highest-leverage line in this repo for how the app feels.
+///
+/// Without it, Prisma resolves a nested `include` as one query *per relation
+/// level*. The database is a real server on another continent — ~150ms per
+/// round trip — so the Today page spent 1265ms making six sequential queries
+/// for what is one join. With the flag: 177ms, one query, byte-identical rows.
+///
+/// It applies to every nested read in the app, so no query needs to opt in;
+/// `relationLoadStrategy: "query"` opts a single one back out if one ever turns
+/// out to aggregate badly.
 generator client {
-  provider = "prisma-client"
-  output   = "../src/generated/prisma"
+  provider        = "prisma-client"
+  output          = "../src/generated/prisma"
+  previewFeatures = ["relationJoins"]
 }
 
 datasource db {

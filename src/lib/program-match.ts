@@ -13,7 +13,17 @@ export const EXPERIENCE_ORDER: Experience[] = ["beginner", "intermediate", "adva
 
 export type ProgramFacts = {
   daysPerWeek: number;
+  /** Week one, as written. What the athlete sees as the start of the range. */
   estimatedMinutes: number;
+  /**
+   * The longest a session gets before the deload (`projectMinuteRange`).
+   *
+   * The time constraint is matched against *this*, not against week one. A
+   * program is not a 40-minute program because its first session is 40 minutes;
+   * the engine adds volume every week, and matching on the opening figure sold
+   * athletes hour-long blocks as lunch-break ones.
+   */
+  peakMinutes: number;
   level: Experience;
   goal: Goal;
 };
@@ -35,7 +45,7 @@ export type ProgramMatch = {
   matched: MatchFactor[];
   /** Program days minus available days. Positive means it asks for more. */
   dayDelta: number;
-  /** Program minutes minus the session budget. Positive means it runs over. */
+  /** Peak minutes minus the session budget. Positive means it runs over. */
   minuteDelta: number;
 };
 
@@ -52,7 +62,7 @@ export function matchProgram(
   preferences: TrainingPreferences,
 ): ProgramMatch {
   const dayDelta = program.daysPerWeek - preferences.daysPerWeek;
-  const minuteDelta = program.estimatedMinutes - preferences.sessionMinutes;
+  const minuteDelta = program.peakMinutes - preferences.sessionMinutes;
 
   const matched: MatchFactor[] = [];
   let score = 0;

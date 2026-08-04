@@ -20,6 +20,8 @@ export const REASON_CODES = [
   "at_mrv",
   "approaching_mrv",
   "recovery_context_poor",
+  "time_capped",
+  "volume_went_elsewhere",
   "deload_week",
   "load_increase",
   "load_decrease",
@@ -94,6 +96,14 @@ const TEXT: Record<ReasonCode, Record<Locale, string>> = {
   recovery_context_poor: {
     en: "Sleep, stress or nutrition are limiting recovery — capping the jump.",
     pt: "Sono, estresse ou nutrição estão limitando a recuperação — limitando o aumento.",
+  },
+  time_capped: {
+    en: "Your recovery had room for more, but the session is at your {minutes}-minute limit — holding here.",
+    pt: "Sua recuperação comportava mais, mas o treino chegou ao seu limite de {minutes} minutos — mantendo assim.",
+  },
+  volume_went_elsewhere: {
+    en: "This muscle earned a set and it went to a higher-return movement.",
+    pt: "Este músculo ganhou uma série, e ela foi para um exercício de melhor retorno.",
   },
   deload_week: {
     en: "Deload week: half the sets at a lighter load to shed fatigue.",

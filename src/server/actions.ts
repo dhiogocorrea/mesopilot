@@ -686,7 +686,7 @@ export async function saveSessionNotes(sessionId: string, notes: string): Promis
  */
 export async function finishSession(sessionId: string): Promise<void> {
   const id = z.string().min(1).parse(sessionId);
-  const { userId, locale, unit, recovery } = await getUserContext();
+  const { userId, locale, unit, recovery, preferences } = await getUserContext();
   await assertOwnsSession(id, userId);
 
   await db.session.update({
@@ -694,7 +694,7 @@ export async function finishSession(sessionId: string): Promise<void> {
     data: { status: "completed", completedAt: new Date() },
   });
 
-  const summary = await applyProgression(id, unit, recovery);
+  const summary = await applyProgression(id, unit, recovery, preferences.sessionMinutes);
 
   if (summary.createdSessionId) {
     try {

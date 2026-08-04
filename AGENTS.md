@@ -336,6 +336,15 @@ Today. Keep those two in agreement; the mark means something only while the app 
 works that way. `public/icon.svg`, `public/icon-maskable.svg` and `src/app/icon.svg`
 carry the same mark and must be updated together.
 
+The PNGs beside them (`public/icon-{192,512}.png`, `public/icon-maskable-*.png` and
+`src/app/apple-icon.png`) are **generated** — `npm run icons:generate` rasterises them
+from those SVGs, so edit the SVG and re-run rather than exporting one by hand. They
+exist because the install flow cannot use vector: iOS ignores the manifest's icons
+entirely and reads `apple-touch-icon`, which Next only emits for an
+`apple-icon.(jpg|jpeg|png)` file, and without one "Add to Home Screen" pins a
+screenshot of the page. Chromium also weighs the manifest's icons when deciding whether
+the app is installable at all, which is what makes `beforeinstallprompt` fire.
+
 The visual register borrows the category's vocabulary — near-black, one signal red,
 condensed caps — and none of anyone's identity. Don't import a competitor's mark,
 wordmark, brand colour or typeface, and don't describe the app as affiliated with the

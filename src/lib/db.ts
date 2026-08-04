@@ -34,8 +34,13 @@ function createClient(): PrismaClient {
     adapter: new PrismaPg({
       connectionString: url,
       max: POOL_MAX,
-      // Hand connections back rather than sitting on them between workouts.
-      idleTimeoutMillis: 10_000,
+      // Opening a connection to a hosted database is TCP, then TLS, then auth —
+      // measured at ~800ms from here. At the previous 10s this pool dropped its
+      // connections faster than an athlete reads a screen, so a click after any
+      // real pause paid that reconnect before its first query. What protects
+      // the pooler is POOL_MAX above, which caps how many we can ever hold;
+      // letting those few stay warm costs the pooler nothing extra.
+      idleTimeoutMillis: 5 * 60_000,
       connectionTimeoutMillis: 15_000,
     }),
   });

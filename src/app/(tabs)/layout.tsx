@@ -1,4 +1,5 @@
 import { BottomNav } from "@/components/bottom-nav";
+import { InstallPrompt } from "@/components/install-prompt";
 import { requireProfile } from "@/server/user";
 
 /**
@@ -16,6 +17,11 @@ export default async function TabsLayout({ children }: { children: React.ReactNo
       {/* Bottom padding clears the fixed nav plus the home indicator. */}
       <main className="flex-1 pb-28">{children}</main>
       <BottomNav />
+      {/* Here rather than on Today: Chromium decides when the app qualifies to
+          be installed, and that can land on whichever tab is open at the time.
+          Deliberately not in the root layout — the login screen is the wrong
+          moment to ask someone to keep an app they cannot see yet. */}
+      <InstallPrompt />
     </div>
   );
 }

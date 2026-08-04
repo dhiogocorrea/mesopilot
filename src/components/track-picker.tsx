@@ -39,6 +39,8 @@ export type BlockOption = {
   daysPerWeek: number;
   weeks: number;
   estimatedMinutes: number;
+  /** What the session grows to before the deload. See `projectMinuteRange`. */
+  peakMinutes: number;
   /** Stock blocks are duplicated into the builder; the athlete's are edited. */
   editable: boolean;
   days: {
@@ -64,6 +66,11 @@ export type TrackOption = {
    */
   daysPerWeek: number;
   estimatedMinutes: number;
+  /**
+   * Where the time budget is actually tested. A block is not a 40-minute block
+   * because week one is 40 minutes — the engine grows it every week.
+   */
+  peakMinutes: number;
   /** Spread across every block, for the summary line. */
   minDaysPerWeek: number;
   maxDaysPerWeek: number;
@@ -93,7 +100,7 @@ function startableNow(track: TrackOption, preferences: TrainingPreferences): boo
   return (
     track.blocks.length > 1 &&
     Math.abs(track.daysPerWeek - preferences.daysPerWeek) <= 1 &&
-    track.estimatedMinutes - preferences.sessionMinutes <= 15
+    track.peakMinutes - preferences.sessionMinutes <= 15
   );
 }
 
@@ -134,6 +141,7 @@ export function TrackPicker({
         facts: {
           daysPerWeek: track.daysPerWeek,
           estimatedMinutes: track.estimatedMinutes,
+          peakMinutes: track.peakMinutes,
           level: track.level,
           goal: track.goal,
         },
@@ -165,7 +173,9 @@ export function TrackPicker({
       if (goal !== null && track.goal !== goal) return false;
       if (duration !== null) {
         const band = DURATION_BANDS.find((entry) => entry.value === duration);
-        if (band && !track.blocks.some((block) => band.test(block.estimatedMinutes))) return false;
+        // Banded on the peak: a block that opens at 40 minutes and finishes at
+        // 70 does not belong under "under 45".
+        if (band && !track.blocks.some((block) => band.test(block.peakMinutes))) return false;
       }
       return true;
     });
@@ -457,7 +467,10 @@ function BlockFacts({ block }: { block: BlockOption }) {
   return (
     <span className="mt-0.5 block text-[12px] tabular-nums text-ink-3">
       {block.daysPerWeek} {t("meso.days")}
-      <span className="mx-1.5 text-ink-3/50">·</span>~{block.estimatedMinutes} min
+      {/* Opening length through to the longest week. One figure here read as a
+          promise the block does not keep — the engine grows it every week. */}
+      <span className="mx-1.5 text-ink-3/50">·</span>~
+      {range(block.estimatedMinutes, block.peakMinutes)} min
       <span className="mx-1.5 text-ink-3/50">·</span>
       {block.weeks} {t("meso.weeks").toLowerCase()}
     </span>
