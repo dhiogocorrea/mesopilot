@@ -1,10 +1,12 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { after } from "next/server";
 import { z } from "zod";
 
 import { db } from "@/lib/db";
 import { relationshipWith } from "./friends";
+import { notify } from "./notify";
 import { getUserContext } from "./user";
 
 /**
@@ -34,7 +36,7 @@ export async function sendFriendRequest(
   const parsed = usernameInput.safeParse(formData.get("username"));
   if (!parsed.success) return { error: "friends.errNotFound" };
 
-  const { userId } = await getUserContext();
+  const { userId, name } = await getUserContext();
 
   const target = await db.user.findUnique({
     where: { usernameLower: parsed.data.toLowerCase() },
@@ -55,6 +57,11 @@ export async function sendFriendRequest(
 
   await db.friendship.create({ data: { requesterId: userId, addresseeId: target.id } });
 
+  // Until now the only way to learn a request existed was to open this screen.
+  // Through `after()` so the round trip to a push service is not on the path
+  // between tapping "add" and seeing it confirmed.
+  after(() => notify(target.id, "friend.request", { name }));
+
   revalidatePath("/friends");
   return { ok: true };
 }
@@ -68,7 +75,7 @@ export async function respondToFriendRequest(
   input: z.infer<typeof respondSchema>,
 ): Promise<void> {
   const data = respondSchema.parse(input);
-  const { userId } = await getUserContext();
+  const { userId, name } = await getUserContext();
 
   // Only the person who was asked may answer, and only while it is pending.
   const updated = await db.friendship.updateMany({
@@ -80,6 +87,22 @@ export async function respondToFriendRequest(
   });
 
   if (updated.count === 0) throw new Error("Not found");
+
+  // Only on accept. A decline is deliberately never announced — the app tells
+  // the asker nothing, and `friends.errDeclined` surfaces only if they try
+  // again; pushing "you were declined" would broadcast a refusal this design
+  // has chosen to keep quiet.
+  //
+  // The extra read is the cost of `updateMany` above, which is what makes the
+  // authorisation check and the write one atomic statement: it never tells us
+  // whose row it just changed.
+  if (data.accept) {
+    const row = await db.friendship.findUnique({
+      where: { id: data.friendshipId },
+      select: { requesterId: true },
+    });
+    if (row) after(() => notify(row.requesterId, "friend.accepted", { name }));
+  }
 
   revalidatePath("/friends");
   revalidatePath("/progress");

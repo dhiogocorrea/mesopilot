@@ -1,5 +1,6 @@
 import { Avatar } from "@/components/avatar";
 import { InstallSection } from "@/components/install-prompt";
+import { PushSection } from "@/components/push-prompt";
 import { ResetTrainingButton } from "@/components/reset-training-button";
 import { SettingsForm } from "@/components/settings-form";
 import { SignOutButton } from "@/components/sign-out-button";
@@ -73,6 +74,10 @@ export default async function SettingsPage() {
         {/* Section and all: it removes itself on a device that is already
             installed, or one that cannot install at all. */}
         <InstallSection />
+
+        {/* Also removes itself when there is nothing to offer — a browser that
+            cannot do push, or an iPhone that has not installed the app yet. */}
+        <PushSection />
 
         <Section label={t("settings.account")}>
           <p className="text-[13px] text-ink-3">{t("settings.signedInAs", { username })}</p>

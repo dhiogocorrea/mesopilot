@@ -1,5 +1,6 @@
 import { BottomNav } from "@/components/bottom-nav";
 import { InstallPrompt } from "@/components/install-prompt";
+import { PushPrompt } from "@/components/push-prompt";
 import { requireProfile } from "@/server/user";
 
 /**
@@ -22,6 +23,10 @@ export default async function TabsLayout({ children }: { children: React.ReactNo
           Deliberately not in the root layout — the login screen is the wrong
           moment to ask someone to keep an app they cannot see yet. */}
       <InstallPrompt />
+      {/* Holds itself back while the install prompt is still on offer — two
+          sheets rising over each other reads as a bug, and on iOS the install
+          is the prerequisite for push working at all. */}
+      <PushPrompt />
     </div>
   );
 }

@@ -51,6 +51,17 @@ export const DECISION_SOURCES = ["rule", "ai", "manual"] as const;
 export type DecisionSource = (typeof DECISION_SOURCES)[number];
 
 /**
+ * The kinds of notification the app can send.
+ *
+ * Every kind here is a direct consequence of something the *recipient* is a
+ * party to — which is why subscribing is the only preference there is. The
+ * moment a kind arrives that someone would reasonably want to mute on its own
+ * (the scheduled nudges), it needs an opt-out row, not another entry here.
+ */
+export const NOTIFICATION_KINDS = ["friend.request", "friend.accepted", "test.ping"] as const;
+export type NotificationKind = (typeof NOTIFICATION_KINDS)[number];
+
+/**
  * Whether an exercise in a logged session is part of the block's plan. The
  * plan is the sessions themselves — next week is written from this week — so
  * "extra" and "skipped" are how an edit stays confined to one day.

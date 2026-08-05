@@ -69,6 +69,7 @@ model User {
   templates    ProgramTemplate[]
   tracks       ProgramTrack[]
   sessions     AuthSession[]
+  pushDevices  PushDevice[]
   achievements UserAchievement[]
 
   friendRequestsSent     Friendship[] @relation("FriendshipRequester")
@@ -199,6 +200,41 @@ model AuthSession {
 
   expiresAt DateTime
   createdAt DateTime @default(now())
+
+  @@index([userId])
+}
+
+/// One browser that agreed to receive push notifications.
+///
+/// Named `PushDevice` rather than `PushSubscription` for the same reason the
+/// auth session is not `Session`: `PushSubscription` is a `lib.dom` global that
+/// the client opt-in has to use, and a generated model of that name would
+/// shadow it silently rather than failing to compile.
+///
+/// The row *is* the preference. Subscribing is the opt-in, turning it off in
+/// Settings deletes the rows, and with none left there is nothing that can be
+/// sent — so there is no separate preferences table until scheduled nudges
+/// arrive and give people something worth muting individually.
+model PushDevice {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// The push service URL, which *is* the device: re-subscribing the same
+  /// browser returns the same endpoint, and a second row would deliver
+  /// everything twice.
+  endpoint String @unique
+
+  /// The subscription's own keys, two columns rather than a JSON blob — the
+  /// schema keeps no `Json` columns, and `web-push` wants them separately.
+  p256dh String
+  auth   String
+
+  createdAt DateTime @default(now())
+
+  /// Refreshed whenever the browser re-subscribes, so a stale row can be
+  /// recognised without spending a send to find out.
+  lastSeenAt DateTime @default(now())
 
   @@index([userId])
 }
@@ -548,6 +584,10 @@ model SessionExercise {
   decisions ProgressionDecision[] @relation("DecisionTarget")
 
   @@unique([sessionId, order])
+  /// Created by `20260801_session_exercise_plan` but never declared here, so
+  /// every later migration wanted to drop it as drift. Postgres does not index
+  /// a foreign key on its own, and this one backs the `plannedFor` lookup.
+  @@index([plannedExerciseId])
 }
 
 model SetLog {

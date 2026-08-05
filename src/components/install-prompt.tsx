@@ -2,6 +2,14 @@
 
 import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 
+import {
+  isIOSDevice,
+  isStandalone,
+  noSubscription,
+  readFlag,
+  subscribeDisplayMode,
+  writeFlag,
+} from "@/lib/device";
 import { useI18n } from "@/lib/i18n/provider";
 import { Sheet } from "./sheet";
 import { Button, Chevron, List, Row, RowButton, Section } from "./ui";
@@ -33,7 +41,23 @@ type BeforeInstallPromptEvent = Event & {
 };
 
 const DISMISSED_KEY = "m505_install_dismissed";
-const VISITS_KEY = "m505_visits";
+
+/**
+ * Exported because the push prompt gates on the same counter — but **this file
+ * is its only writer.** `InstallPrompt` increments it in a lazy `useState`
+ * initialiser; a second component doing the same would count every visit twice
+ * and quietly break both gates.
+ */
+export const VISITS_KEY = "m505_visits";
+
+/** How many visits have happened, without touching the count. */
+export function readVisits(): number {
+  try {
+    return Number(window.localStorage.getItem(VISITS_KEY) ?? "0");
+  } catch {
+    return 0;
+  }
+}
 
 /**
  * Not on the first visit. The sheet asks someone to give a home-screen slot to
@@ -42,46 +66,19 @@ const VISITS_KEY = "m505_visits";
  */
 const MIN_VISITS = 2;
 
-// --------------------------------------------------------------- platform
+// ------------------------------------------------------------------ hook
 
 /**
- * Both of these are read through `useSyncExternalStore` rather than assigned
- * from an effect: they are facts about the device that the server cannot know,
- * and setting them via `setState` on mount is the cascading-render pattern the
- * React compiler rejects. The server snapshot is `false` for both, so the first
- * paint matches the markup and the real answer arrives on hydration.
+ * The device facts come from `src/lib/device.ts`, shared with the push prompt —
+ * on iOS the push gate is exactly "is iOS and not installed", so the two must
+ * never disagree about either half.
+ *
+ * They are read through `useSyncExternalStore` rather than assigned from an
+ * effect: they are facts about the device the server cannot know, and setting
+ * them via `setState` on mount is the cascading-render pattern the React
+ * compiler rejects. The server snapshot is `false`, so the first paint matches
+ * the markup and the real answer arrives on hydration.
  */
-function subscribeDisplayMode(onChange: () => void): () => void {
-  const query = window.matchMedia("(display-mode: standalone)");
-  query.addEventListener("change", onChange);
-  return () => query.removeEventListener("change", onChange);
-}
-
-function isStandalone(): boolean {
-  return (
-    window.matchMedia("(display-mode: standalone)").matches ||
-    // iOS Safari never adopted `display-mode` and reports it here instead.
-    (window.navigator as { standalone?: boolean }).standalone === true
-  );
-}
-
-/** The user agent does not change, so there is nothing to subscribe to. */
-const noSubscription = () => () => {};
-
-function isIOSDevice(): boolean {
-  return /iphone|ipad|ipod/i.test(window.navigator.userAgent);
-}
-
-function readFlag(key: string): boolean {
-  try {
-    return window.localStorage.getItem(key) !== null;
-  } catch {
-    // Private mode, or storage disabled.
-    return false;
-  }
-}
-
-// ------------------------------------------------------------------ hook
 
 export type InstallState = {
   /** Chromium only: a real install dialog is available right now. */
@@ -133,14 +130,7 @@ export function useInstallPrompt(): InstallState {
     setDeferred(null);
   }, [deferred]);
 
-  const dismiss = useCallback(() => {
-    try {
-      window.localStorage.setItem(DISMISSED_KEY, "1");
-    } catch {
-      // Not asking again this session is close enough; a prompt is not state
-      // worth failing a render over.
-    }
-  }, []);
+  const dismiss = useCallback(() => writeFlag(DISMISSED_KEY), []);
 
   const installed = standalone || justInstalled;
 

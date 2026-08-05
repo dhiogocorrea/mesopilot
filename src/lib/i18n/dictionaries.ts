@@ -385,6 +385,7 @@ export const en = {
   "settings.signOut": "Sign out",
 
   "settings.app": "App",
+  "settings.notifications": "Notifications",
 
   "install.title": "Add to home screen",
   "install.body": "Opens full screen, without the browser bar — and lands one tap away between sets.",
@@ -393,6 +394,28 @@ export const en = {
   "install.iosShare": "Tap the Share button in Safari's toolbar.",
   "install.iosAdd": "Scroll down and choose “Add to Home Screen”.",
   "install.iosConfirm": "Tap “Add”. Meso505 appears with your other apps.",
+
+  "push.title": "Turn on notifications",
+  "push.body": "So a friend request or an accepted invite reaches you without opening the app.",
+  "push.rowBody": "Friend requests and replies.",
+  "push.enable": "Turn on",
+  "push.disable": "Turn off",
+  "push.on": "On for this device.",
+  "push.off": "Off.",
+  "push.blocked": "Blocked in your browser settings — turn notifications back on for this site to use them.",
+  "push.test": "Send a test",
+  "push.testSent": "Sent — it should arrive in a moment.",
+  "push.failed": "Could not turn notifications on. Try again.",
+
+  // Sent to a device, not rendered in a page. `notify()` reads these from the
+  // *recipient's* locale, so a Portuguese athlete hears about an English
+  // friend's request in Portuguese.
+  "notif.friendRequest.title": "New friend request",
+  "notif.friendRequest.body": "{name} wants to train alongside you.",
+  "notif.friendAccepted.title": "{name} accepted",
+  "notif.friendAccepted.body": "You can see each other's sessions and medals now.",
+  "notif.test.title": "Notifications are on",
+  "notif.test.body": "This is what one looks like. Nothing else to do.",
 
   "auth.tagline": "Adaptive hypertrophy programming. Your next week is written from the last one.",
   "auth.signIn": "Sign in",
@@ -884,6 +907,7 @@ export const pt: Dictionary = {
   "settings.signOut": "Sair",
 
   "settings.app": "Aplicativo",
+  "settings.notifications": "Notificações",
 
   "install.title": "Adicionar à tela de início",
   "install.body": "Abre em tela cheia, sem a barra do navegador — e fica a um toque de distância entre as séries.",
@@ -892,6 +916,25 @@ export const pt: Dictionary = {
   "install.iosShare": "Toque no botão Compartilhar na barra do Safari.",
   "install.iosAdd": "Role para baixo e escolha “Adicionar à Tela de Início”.",
   "install.iosConfirm": "Toque em “Adicionar”. O Meso505 aparece junto dos seus apps.",
+
+  "push.title": "Ativar notificações",
+  "push.body": "Para que um pedido de amizade ou um convite aceito chegue até você sem abrir o app.",
+  "push.rowBody": "Pedidos de amizade e respostas.",
+  "push.enable": "Ativar",
+  "push.disable": "Desativar",
+  "push.on": "Ativadas neste aparelho.",
+  "push.off": "Desativadas.",
+  "push.blocked": "Bloqueadas nas configurações do navegador — reative as notificações para este site para usá-las.",
+  "push.test": "Enviar um teste",
+  "push.testSent": "Enviada — deve chegar em instantes.",
+  "push.failed": "Não foi possível ativar as notificações. Tente de novo.",
+
+  "notif.friendRequest.title": "Novo pedido de amizade",
+  "notif.friendRequest.body": "{name} quer treinar junto com você.",
+  "notif.friendAccepted.title": "{name} aceitou",
+  "notif.friendAccepted.body": "Agora vocês veem os treinos e as medalhas um do outro.",
+  "notif.test.title": "Notificações ativadas",
+  "notif.test.body": "É assim que elas aparecem. Não precisa fazer mais nada.",
 
   "auth.tagline": "Programação adaptativa de hipertrofia. Sua próxima semana nasce da anterior.",
   "auth.signIn": "Entrar",

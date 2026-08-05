@@ -303,6 +303,69 @@ backfill, nothing to keep in sync, and a session that is edited or deleted stops
 in the feed because it stops being true. Two reads merged in memory beats an append-only
 log that can disagree with the sessions it describes.
 
+## Notifications
+
+`src/server/notify.ts` is the whole send side. `notify(userId, kind, params)` is
+the only way anything reaches an athlete who is not looking at the app, and it
+holds three properties on purpose:
+
+- **It takes a `userId` and nothing from the request.** That is what will let a
+  scheduled job call it. `coachSession()` reads `getUserContext()` internally and
+  therefore *cannot* run outside a request — this must not repeat that.
+- **It localises from the recipient's `User.locale`**, never the actor's request
+  context, so a Brazilian athlete hears about an English-speaking friend's
+  request in Portuguese. Copy lives in the dictionaries as `notif.*` keys rather
+  than in a local `COPY` const like `email.ts`, because `pt` being typed as
+  `Dictionary` is what makes a missing translation a compile error.
+- **It cannot break its caller.** The body is wrapped, it returns `void` so
+  nothing can branch on it, and every call site goes through `after()`. Same
+  reasoning as `awardAchievements` and the coach.
+
+`NotifyPayloads` is a mapped type, one entry per kind. That is the outbound half
+of the privacy rule `friends.ts` enforces on reads — a payload cannot mention
+bodyweight or injuries because no kind's params admit them. Widening a payload to
+`Record<string, unknown>` would throw that away.
+
+**`PushDevice`, not `PushSubscription`** — the latter is a `lib.dom` global the
+client opt-in uses, and a generated model of that name shadows it silently. Same
+collision that forced `AuthSession`. The `endpoint` *is* the device and is
+unique, so saving is an upsert; `userId` is in the **update** branch too, because
+the same browser can later be signed in as someone else.
+
+**The row is the preference.** Subscribing is the opt-in and the Settings switch
+deletes the rows, so there is nothing left that can be sent. There is no
+preferences table until scheduled nudges arrive — those are the ones people mute
+individually, and they want an opt-out row (absent row = subscribed, the
+`Friendship` declined-row logic inverted), not a column per category.
+
+A 404 or 410 from the push service means that subscription is gone for good, so
+the row is deleted **by endpoint** with `deleteMany` — `delete` throws when two
+concurrent sends both find it already gone. Any other status is a bad afternoon
+at Google, not a reason to unsubscribe someone.
+
+VAPID keys absent is a supported state, like `RESEND_API_KEY` and the coach: the
+message is logged instead of sent. Two traps worth keeping in mind —
+`NEXT_PUBLIC_VAPID_PUBLIC_KEY` is inlined at **build** time, so missing it from
+the build environment ships `undefined` to the browser while the server looks
+configured; and `web-push` accepts only an `https:` or `mailto:` VAPID subject,
+which `http://localhost` is not, so `vapidSubject()` cannot simply fall back to
+`appUrl()`.
+
+`public/sw.js` is plain JavaScript served verbatim, with **no `fetch` handler** —
+adding one would quietly give the app offline caching it has never been built or
+tested for, and a stale prescription served from a cache mid-workout is worse
+than a page that does not load. `next.config.ts` sends it `no-store`, because a
+browser holding a stale worker runs last month's push handler indefinitely.
+
+**On iOS, push is delivered only to a home-screen-installed app.** That makes the
+install prompt a hard prerequisite there, which is why `push-prompt.tsx` renders
+nothing when `isIOSDevice() && !isStandalone()` and holds itself back while the
+install prompt is still on offer. Both mount in the tabs layout; two self-opening
+sheets stacking reads as a bug. The device facts they share live in
+`src/lib/device.ts` so the two can never disagree — and `m505_visits` has exactly
+one writer, `InstallPrompt`, because a second one would double-count and break
+both gates.
+
 ## Visual system
 
 Dark only — `color-scheme: dark`, no light branch. One surface to design against.
