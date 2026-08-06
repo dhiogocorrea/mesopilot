@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useState, useSyncExternalStore, useTransition } from "react";
 
 import {
   isIOSDevice,
@@ -13,10 +13,19 @@ import {
   writeFlag,
 } from "@/lib/device";
 import { useI18n } from "@/lib/i18n/provider";
-import { deletePushDevice, savePushDevice, sendTestPush } from "@/server/push-actions";
+import {
+  SCHEDULED_NOTIFICATION_KINDS,
+  type ScheduledNotificationKind,
+} from "@/lib/types";
+import {
+  deletePushDevice,
+  savePushDevice,
+  sendTestPush,
+  setReminder,
+} from "@/server/push-actions";
 import { readVisits, useInstallPrompt } from "./install-prompt";
 import { Sheet } from "./sheet";
-import { Button, Chevron, List, Row, RowButton, Section } from "./ui";
+import { Button, Chevron, cx, List, Row, RowButton, Section } from "./ui";
 
 /**
  * Turning on push notifications.
@@ -232,8 +241,14 @@ export function PushPrompt() {
   return <PushSheet open={open} onClose={close} state={state} />;
 }
 
-/** The permanent control, for anyone who dismissed the sheet or never saw it. */
-export function PushSection() {
+/**
+ * The permanent control, for anyone who dismissed the sheet or never saw it.
+ *
+ * `muted` comes from the account row rather than being fetched here: reading it
+ * in this component would mean a server action that takes a user id, and an id
+ * from a client says nothing about whose it is.
+ */
+export function PushSection({ muted }: { muted: string[] }) {
   const state = usePushPrompt();
   const [open, setOpen] = useState(false);
   const [tested, setTested] = useState(false);
@@ -266,24 +281,77 @@ export function PushSection() {
           works end to end, which makes the control self-evidently functional
           rather than a switch you have to take on faith. */}
       {state.isOn && (
-        <div className="mt-4">
-          <Button
-            variant="secondary"
-            size="sm"
-            disabled={state.busy}
-            onClick={async () => {
-              await sendTestPush();
-              setTested(true);
-            }}
-          >
-            {t("push.test")}
-          </Button>
-          {tested && <p className="mt-2 text-[13px] text-ink-3">{t("push.testSent")}</p>}
-        </div>
+        <>
+          <div className="mt-4">
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={state.busy}
+              onClick={async () => {
+                await sendTestPush();
+                setTested(true);
+              }}
+            >
+              {t("push.test")}
+            </Button>
+            {tested && <p className="mt-2 text-[13px] text-ink-3">{t("push.testSent")}</p>}
+          </div>
+
+          {/* Only the scheduled kinds are here. A friend request arrives because
+              somebody acted on you, and a switch that silenced those would
+              leave you wondering for weeks why nobody ever adds you. */}
+          <p className="mt-8 text-[13px] leading-relaxed text-ink-3">
+            {t("settings.remindersBody")}
+          </p>
+          <List className="mt-3">
+            {SCHEDULED_NOTIFICATION_KINDS.map((kind) => (
+              <Row key={kind}>
+                <ReminderToggle kind={kind} enabled={!muted.includes(kind)} />
+              </Row>
+            ))}
+          </List>
+        </>
       )}
 
       <PushSheet open={open} onClose={() => setOpen(false)} state={state} />
     </Section>
+  );
+}
+
+function ReminderToggle({
+  kind,
+  enabled,
+}: {
+  kind: ScheduledNotificationKind;
+  enabled: boolean;
+}) {
+  const { t } = useI18n();
+  const [on, setOn] = useState(enabled);
+  const [pending, startTransition] = useTransition();
+
+  return (
+    <RowButton
+      disabled={pending}
+      onClick={() => {
+        // Flipped immediately rather than after the round trip: this is a
+        // preference, and a switch that waits on a database on another
+        // continent feels broken even when it is working.
+        const next = !on;
+        setOn(next);
+        startTransition(async () => {
+          try {
+            await setReminder(kind, next);
+          } catch {
+            setOn(!next);
+          }
+        });
+      }}
+    >
+      <span className="min-w-0 flex-1 text-left text-[15px]">{t(`reminders.${kind}`)}</span>
+      <span className={cx("text-[13px]", on ? "text-accent" : "text-ink-3")}>
+        {on ? t("push.on2") : t("push.off")}
+      </span>
+    </RowButton>
   );
 }
 

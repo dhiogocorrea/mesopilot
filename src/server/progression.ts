@@ -1,7 +1,7 @@
 import "server-only";
 
 import { db } from "@/lib/db";
-import { renderReasons } from "@/lib/progression/reasons";
+import { renderReasons, type Reason } from "@/lib/progression/reasons";
 import { allocateSets, type AllocatableExercise } from "@/lib/progression/allocate";
 import {
   isDeloadWeek,
@@ -338,6 +338,121 @@ export async function applyProgression(
 }
 
 /**
+ * Writes next week's version of a *skipped* session's day, unchanged.
+ *
+ * The block is a chain — Week 3 Day 1 exists because Week 2 Day 1 was finished —
+ * and each day is its own lane. Marking a session skipped without this would
+ * stall that lane permanently: the athlete would reach week 5 on the days they
+ * trained while the skipped one sat at week 1 forever, and the block would close
+ * around it.
+ *
+ * Deliberately no engine. A session that was not done is not evidence: running
+ * `prescribe()` over it would read an untouched slot as work that produced
+ * nothing and cut its sets accordingly. So the whole day comes back exactly as
+ * it was, at the new week's effort target — the same reasoning, one level up,
+ * as the `skipped` entry branch in `applyProgression`.
+ */
+export async function carryForwardSession(sessionId: string): Promise<string | null> {
+  const session = await db.session.findUnique({
+    where: { id: sessionId },
+    include: {
+      mesocycle: true,
+      entries: { orderBy: { order: "asc" }, include: { sets: { orderBy: { order: "asc" } } } },
+    },
+  });
+
+  if (!session) throw new Error(`Session ${sessionId} not found`);
+
+  const { mesocycle } = session;
+  const nextWeek = session.week + 1;
+
+  // The last week of a block has nothing after it. Skipping here does *not*
+  // complete the block: a block is completed by finishing, and closing one on
+  // the strength of a session nobody did would be the wrong story to tell.
+  if (nextWeek > mesocycle.weeks) return null;
+
+  const targetRir = rirForWeek(nextWeek, mesocycle.weeks, mesocycle.startRir);
+  const reasons: Reason[] = [{ code: "skipped_last_week" }];
+  const reasonEn = renderReasons(reasons, "en");
+  const reasonPt = renderReasons(reasons, "pt");
+
+  // An exercise added for today only stops here, exactly as it does after a
+  // completed session — the plan never had it.
+  const carried = session.entries.filter((entry) => entry.plan !== "extra");
+
+  return db.$transaction(async (tx) => {
+    const existing = await tx.session.findUnique({
+      where: {
+        mesocycleId_week_dayIndex: {
+          mesocycleId: mesocycle.id,
+          week: nextWeek,
+          dayIndex: session.dayIndex,
+        },
+      },
+    });
+    if (existing) return existing.id;
+
+    const nextSession = await tx.session.create({
+      data: {
+        mesocycleId: mesocycle.id,
+        week: nextWeek,
+        dayIndex: session.dayIndex,
+        label: session.label,
+        isDeload: isDeloadWeek(nextWeek, mesocycle.weeks),
+      },
+    });
+
+    const nextEntries = await tx.sessionExercise.createManyAndReturn({
+      data: carried.map((entry) => ({
+        sessionId: nextSession.id,
+        order: entry.order,
+        // A one-day substitution leaves the plan as it was, and neither `plan`
+        // nor `plannedExerciseId` is copied forward — a generated week always
+        // starts clean.
+        exerciseId: entry.plannedExerciseId ?? entry.exerciseId,
+        muscleGroupId: entry.muscleGroupId,
+        targetSets: entry.targetSets,
+        repMin: entry.repMin,
+        repMax: entry.repMax,
+        targetRir,
+        restSec: entry.restSec,
+      })),
+      select: { id: true, order: true },
+    });
+
+    const entryIdByOrder = new Map(nextEntries.map((row) => [row.order, row.id]));
+
+    // The prescribed load carries too, so the athlete opens next week with the
+    // number they were going to attempt rather than a blank field.
+    await tx.setLog.createMany({
+      data: carried.flatMap((entry) =>
+        Array.from({ length: entry.targetSets }, (_, index) => ({
+          sessionExerciseId: entryIdByOrder.get(entry.order)!,
+          order: index,
+          weightKg: entry.sets[index]?.weightKg ?? null,
+        })),
+      ),
+    });
+
+    await tx.progressionDecision.createMany({
+      data: carried.map((entry) => ({
+        sessionExerciseId: entryIdByOrder.get(entry.order)!,
+        sourceExerciseId: entry.id,
+        source: "rule",
+        setDelta: 0,
+        loadDeltaPct: 0,
+        targetRir,
+        reasonEn,
+        reasonPt,
+        payload: JSON.stringify({ skippedSession: true }),
+      })),
+    });
+
+    return nextSession.id;
+  });
+}
+
+/**
  * Prescribed sets per muscle group across one week of a block. This is the
  * number the MEV/MRV landmarks are defined against — a muscle's weekly dose,
  * not what any single session gave it.
@@ -347,9 +462,15 @@ export async function weeklyVolumeByMuscle(
   week: number,
 ): Promise<Map<string, number>> {
   const entries = await db.sessionExercise.findMany({
-    // A skipped exercise prescribes nothing: the muscle does not receive those
-    // sets, and this number is what the landmarks are compared against.
-    where: { session: { mesocycleId, week }, plan: { not: "skipped" } },
+    // Neither a skipped exercise nor a skipped *session* prescribes anything:
+    // the muscle does not receive those sets, and this number is what the
+    // landmarks are compared against. Counting a skipped session's entries here
+    // would tell the allocator a muscle is near its ceiling on the strength of
+    // work nobody did, and it would cut real sets from the days that happened.
+    where: {
+      session: { mesocycleId, week, status: { not: "skipped" } },
+      plan: { not: "skipped" },
+    },
     select: { muscleGroupId: true, targetSets: true },
   });
 

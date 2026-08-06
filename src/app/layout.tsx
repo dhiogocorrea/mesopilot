@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 
+import { Analytics } from "@/components/analytics";
 import { I18nProvider } from "@/lib/i18n/provider";
 import { getPreferredLocale } from "@/server/locale";
 import { getOptionalUserContext } from "@/server/user";
@@ -56,6 +57,7 @@ export default async function RootLayout({
         <I18nProvider locale={locale} unit={unit}>
           {children}
         </I18nProvider>
+        <Analytics />
       </body>
     </html>
   );

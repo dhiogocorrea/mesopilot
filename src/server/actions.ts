@@ -32,7 +32,7 @@ import {
   assertOwnsSessionExercise,
   assertOwnsSetLog,
 } from "./ownership";
-import { applyProgression } from "./progression";
+import { applyProgression, carryForwardSession } from "./progression";
 import { getUserContext } from "./user";
 
 /**
@@ -441,8 +441,14 @@ export async function removeSet(setId: string): Promise<void> {
  */
 const SESSION_CLOSED = "errors.sessionClosed";
 
+/**
+ * Skipped is closed too. Its lane has already been carried into next week, so
+ * logging into it would file real numbers against a day the block has moved
+ * past — `reopenSession` is the way back in, exactly as it is for a finished
+ * one.
+ */
 function assertSessionOpen(status: string): void {
-  if (status === "completed") throw new Error(SESSION_CLOSED);
+  if (status === "completed" || status === "skipped") throw new Error(SESSION_CLOSED);
 }
 
 /**
@@ -743,11 +749,54 @@ const reopenSchema = z.object({
  *
  * Achievements are deliberately **not** revoked; see `awardAchievements`.
  */
+/**
+ * "I am not doing this one."
+ *
+ * A missed day is a real thing and the app had no way to say it: the session sat
+ * `planned` forever, Today kept offering it, and jumping past it from the plan
+ * stalled that day's lane for the rest of the block. This marks it skipped and —
+ * the important half — writes next week's version of the same day anyway, so the
+ * chain survives a gap in it.
+ *
+ * Refused once anything is logged, like every other edit that would file numbers
+ * against work that did not happen. A session with sets in it is not skipped; it
+ * is unfinished, and `reopenSession(clear)` is the honest way to empty it.
+ */
+export async function skipSession(sessionId: string): Promise<void> {
+  const id = z.string().min(1).parse(sessionId);
+  const { userId } = await getUserContext();
+  const { status } = await assertOwnsSession(id, userId);
+
+  if (status === "completed") throw new Error("errors.sessionClosed");
+  if (status === "skipped") return;
+
+  const logged = await db.setLog.count({
+    where: { sessionExercise: { sessionId: id }, completed: true },
+  });
+  if (logged > 0) throw new Error("errors.sessionStarted");
+
+  await db.session.update({
+    where: { id },
+    data: { status: "skipped", startedAt: null, completedAt: null },
+  });
+
+  // Outside the update on purpose: this writes a whole week of rows and would
+  // otherwise sit inside a transaction long enough to matter against a hosted
+  // database. Both halves are idempotent, so a retry cannot duplicate a week.
+  await carryForwardSession(id);
+
+  revalidatePath("/", "layout");
+  redirect("/");
+}
+
 export async function reopenSession(input: z.infer<typeof reopenSchema>): Promise<void> {
   const data = reopenSchema.parse(input);
   const { userId } = await getUserContext();
   const { mesocycleId, week, status } = await assertOwnsSession(data.sessionId, userId);
-  if (status !== "completed") return;
+  // Skipped counts too: changing your mind about a missed day should put it
+  // back, and the machinery below — delete the week this one generated, unless
+  // it is already underway — is exactly what that needs.
+  if (status !== "completed" && status !== "skipped") return;
 
   const session = await db.session.findUnique({
     where: { id: data.sessionId },
@@ -777,12 +826,16 @@ export async function reopenSession(input: z.infer<typeof reopenSchema>): Promis
     // Cascades its entries, their sets and the decisions that explained them.
     if (generated) await tx.session.delete({ where: { id: generated.id } });
 
+    // A skipped session was never underway, so it can only go back to planned —
+    // resuming one would present an empty session as a workout in progress.
+    const restored = status === "skipped" || data.clear ? "planned" : "in_progress";
+
     await tx.session.update({
       where: { id: data.sessionId },
       data: {
-        status: data.clear ? "planned" : "in_progress",
+        status: restored,
         completedAt: null,
-        ...(data.clear ? { startedAt: null } : {}),
+        ...(restored === "planned" ? { startedAt: null } : {}),
       },
     });
 

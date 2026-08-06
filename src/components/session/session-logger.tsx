@@ -4,7 +4,7 @@ import Link from "next/link";
 import { Fragment, useEffect, useMemo, useRef, useState, useTransition } from "react";
 
 import { useI18n } from "@/lib/i18n/provider";
-import { finishSession, reopenSession, startSession } from "@/server/actions";
+import { finishSession, reopenSession, skipSession, startSession } from "@/server/actions";
 import { Sheet } from "../sheet";
 import { Button, Chip, EmptyState, cx } from "../ui";
 import {
@@ -101,10 +101,12 @@ export function SessionLogger({ session }: { session: SessionView }) {
   const [askingMuscleId, setAskingMuscleId] = useState<string | null>(null);
   const [editJob, setEditJob] = useState<EditJob | null>(null);
   const [confirmingFinish, setConfirmingFinish] = useState(false);
+  const [confirmingSkip, setConfirmingSkip] = useState(false);
   const [reopening, setReopening] = useState(false);
   const [finishing, startFinish] = useTransition();
 
   const completed = session.status === "completed";
+  const skipped = session.status === "skipped";
 
   // Opening a planned session is the same gesture as starting it — there is no
   // separate "begin" tap to forget.
@@ -289,7 +291,24 @@ export function SessionLogger({ session }: { session: SessionView }) {
           />
         )}
 
-        {completed ? (
+        {skipped ? (
+          // Nothing to finish and nothing logged — the only thing left to offer
+          // is changing your mind, which puts the day back in the plan.
+          <div className="space-y-3">
+            <p className="text-sm leading-relaxed text-ink-2">{t("session.skippedBody")}</p>
+            <Button
+              variant="secondary"
+              size="lg"
+              full
+              disabled={finishing}
+              onClick={() =>
+                startFinish(() => reopenSession({ sessionId: session.id, clear: true }))
+              }
+            >
+              {finishing ? t("common.loading") : t("session.unskip")}
+            </Button>
+          </div>
+        ) : completed ? (
           <Button variant="secondary" size="lg" full onClick={() => setReopening(true)}>
             {t("session.edit")}
           </Button>
@@ -322,14 +341,55 @@ export function SessionLogger({ session }: { session: SessionView }) {
             </div>
           </div>
         ) : (
-          <Button
-            size="lg"
-            full
-            disabled={loggedSets === 0}
-            onClick={() => setConfirmingFinish(true)}
-          >
-            {t("session.finish")}
-          </Button>
+          <>
+            <Button
+              size="lg"
+              full
+              disabled={loggedSets === 0}
+              onClick={() => setConfirmingFinish(true)}
+            >
+              {t("session.finish")}
+            </Button>
+
+            {/* Only while the session is still empty. Once a set is ticked this
+                is not a skipped day, it is an unfinished one — and the honest
+                way out of that is to clear it, not to relabel it. */}
+            {loggedSets === 0 &&
+              (confirmingSkip ? (
+                <div className="mt-3 space-y-2.5">
+                  <p className="text-sm leading-relaxed text-ink-2">{t("session.skipConfirm")}</p>
+                  <div className="flex gap-2.5">
+                    <Button
+                      variant="secondary"
+                      size="lg"
+                      className="flex-1"
+                      disabled={finishing}
+                      onClick={() => startFinish(() => skipSession(session.id))}
+                    >
+                      {finishing ? t("common.loading") : t("session.skip")}
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="lg"
+                      className="flex-1"
+                      onClick={() => setConfirmingSkip(false)}
+                    >
+                      {t("common.cancel")}
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <Button
+                  variant="ghost"
+                  size="md"
+                  full
+                  className="mt-2"
+                  onClick={() => setConfirmingSkip(true)}
+                >
+                  {t("session.skip")}
+                </Button>
+              ))}
+          </>
         )}
       </div>
     </div>

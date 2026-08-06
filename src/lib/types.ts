@@ -53,13 +53,41 @@ export type DecisionSource = (typeof DECISION_SOURCES)[number];
 /**
  * The kinds of notification the app can send.
  *
- * Every kind here is a direct consequence of something the *recipient* is a
- * party to — which is why subscribing is the only preference there is. The
- * moment a kind arrives that someone would reasonably want to mute on its own
- * (the scheduled nudges), it needs an opt-out row, not another entry here.
+ * Split by who asked for it. A **reactive** kind is a direct consequence of
+ * something the recipient is a party to — someone sent them a request, someone
+ * answered theirs — and arrives because they were already involved. A
+ * **scheduled** kind is the app deciding on its own that now is a good time to
+ * say something, which is a different bargain and the reason only these can be
+ * muted individually (`NotificationOptOut`). Turning notifications off entirely
+ * remains the way to stop the rest.
  */
-export const NOTIFICATION_KINDS = ["friend.request", "friend.accepted", "test.ping"] as const;
+export const REACTIVE_NOTIFICATION_KINDS = [
+  "friend.request",
+  "friend.accepted",
+  "test.ping",
+] as const;
+
+export const SCHEDULED_NOTIFICATION_KINDS = [
+  /** A workout was started and left open. */
+  "session.abandoned",
+  /** A training week is about to pass with nothing in it. */
+  "streak.atRisk",
+  /** No active block, and nothing logged for a while. */
+  "training.lapsed",
+] as const;
+
+export const NOTIFICATION_KINDS = [
+  ...REACTIVE_NOTIFICATION_KINDS,
+  ...SCHEDULED_NOTIFICATION_KINDS,
+] as const;
+
+export type ReactiveNotificationKind = (typeof REACTIVE_NOTIFICATION_KINDS)[number];
+export type ScheduledNotificationKind = (typeof SCHEDULED_NOTIFICATION_KINDS)[number];
 export type NotificationKind = (typeof NOTIFICATION_KINDS)[number];
+
+export function isScheduledKind(value: string): value is ScheduledNotificationKind {
+  return (SCHEDULED_NOTIFICATION_KINDS as readonly string[]).includes(value);
+}
 
 /**
  * Whether an exercise in a logged session is part of the block's plan. The

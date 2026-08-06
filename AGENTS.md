@@ -168,6 +168,28 @@ the plan, not a record). Reopening a final-week session puts the *block* back to
 exists because Week 2 Day 1 was finished — so removing a link leaves that day unable to
 ever produce another session. Reopening rewinds the chain instead of cutting it.
 
+**Skipping one is offered, and the whole feature is the second half of it.**
+`skipSession` marks the session `skipped` *and* calls `carryForwardSession`, which writes
+next week's version of that day anyway. Without that second half the lane stalls forever:
+each day advances independently, so the athlete reaches week 5 on the days they trained
+while the missed one sits at week 1, and the block then closes around it — it is completed
+by whichever final-week session finishes first. The carried week runs no engine at all. A
+session that was not done is not evidence, and `prescribe()` would read an untouched slot
+as work that produced nothing and cut its sets; it comes back unchanged at the new week's
+RIR with `skipped_last_week`, one level up from the identical rule for a skipped *entry*.
+
+Two consequences that are easy to miss. `weeklyVolumeByMuscle` filters on
+`session.status` as well as `plan` — counting a skipped session's sets would tell the
+allocator a muscle is near its ceiling on work nobody did, and it would cut real sets from
+the days that happened. And `assertSessionOpen` refuses a skipped session like a completed
+one: its lane has already moved on, so logging into it would file real numbers against a
+day the block is past. `reopenSession` accepts both, and is the only way back in.
+
+There is still **no calendar anywhere in this app** — `Session.scheduledFor` is declared
+and written nowhere. A "week" is one pass through the rotation, so nothing is ever overdue
+and falling behind costs only calendar time. Skipping is for the day you decide not to do
+at all, not for the one you are doing late.
+
 **Achievements are never revoked**, only re-evaluated. An unlock row records that it
 happened, and correcting a typo does not un-happen it; the alternative punishes the one
 behaviour you want. It also makes re-finishing idempotent.
@@ -356,6 +378,58 @@ adding one would quietly give the app offline caching it has never been built or
 tested for, and a stale prescription served from a cache mid-workout is worse
 than a page that does not load. `next.config.ts` sends it `no-store`, because a
 browser holding a stale worker runs last month's push handler indefinitely.
+
+### Scheduled reminders
+
+`src/app/api/cron/notifications/route.ts` is the only thing in the app that runs
+when nobody is using it. It is a plain authenticated HTTP endpoint on purpose —
+Vercel Cron drives it via `vercel.json`, but a GitHub Action, Supabase `pg_cron`
+or a bare `curl` would do equally well, and nothing about the schedule is in the
+code. `CRON_SECRET` **unset means the endpoint is closed**, and a wrong key gets
+a 404 rather than a 401, because an endpoint that answers differently to a bad
+key is one that confirms it exists. It must stay on the Node runtime: `web-push`
+needs `node:crypto`, and on edge it would fail only in production.
+
+**The rules live in `src/lib/reminders.ts`, pure and tested, and `src/server/`
+only reads rows for them.** "Should this person be interrupted at 9pm on a
+Saturday" has edge cases, and the point of the split is being able to ask without
+a database and without waiting for Saturday. Every rule is written to
+*under*-send: a missed nudge is a missed nudge, but a streak warning to someone
+who trained this morning is what gets notifications turned off.
+
+`src/lib/time.ts` answers everything in the athlete's own zone through `Intl` —
+no date library, and nothing to update when a country moves its clocks. It exists
+because both questions a scheduled notification asks are local ones: *is this a
+reasonable hour* (09:00–21:00 where they are, so a global schedule still lands
+locally) and *have they had this today* — where "today" must be their day, or
+someone near the date line gets two.
+
+`User.timezone` is read from the browser by `TimezoneSync`, which writes only
+when it disagrees with the account row, so the common case is a comparison and no
+request. Null is read as UTC, which is what every account that predates the
+column has.
+
+**`NotificationLog` is the idempotency mechanism, not a record.** The unique key
+on `(userId, kind, day)` is claimed *before* the send, so two overlapping cron
+runs race for the insert and exactly one wins — verified with three concurrent
+calls producing one row. A push cannot be un-sent, so failing towards
+under-sending is the only safe direction. Note the ordering in `notify()`: the
+"no devices" check comes *before* the claim, so an athlete with nothing
+registered does not burn their day.
+
+**Only scheduled kinds can be muted.** `NotificationOptOut` holds the "no" —
+absent row means subscribed, the `Friendship` declined-row logic inverted, so a
+kind added later is on by default rather than silently off for everyone who
+signed up first. `setReminder` refuses anything not in
+`SCHEDULED_NOTIFICATION_KINDS`: a friend request arrives because somebody acted
+on you, and a switch that silenced those would leave people wondering for weeks
+why nobody adds them. The muted list is read in the settings *page* and passed
+down — fetching it inside the client component would need an action taking a
+user id, and an id from a client says nothing about whose it is.
+
+The cron sends **at most one reminder per athlete per run**, most actionable
+first. Someone with an abandoned workout, a dying streak and no active block is
+having a bad week; three notifications about it is piling on.
 
 **On iOS, push is delivered only to a home-screen-installed app.** That makes the
 install prompt a hard prerequisite there, which is why `push-prompt.tsx` renders

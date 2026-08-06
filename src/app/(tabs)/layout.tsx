@@ -1,6 +1,7 @@
 import { BottomNav } from "@/components/bottom-nav";
 import { InstallPrompt } from "@/components/install-prompt";
 import { PushPrompt } from "@/components/push-prompt";
+import { TimezoneSync } from "@/components/timezone-sync";
 import { requireProfile } from "@/server/user";
 
 /**
@@ -11,7 +12,7 @@ import { requireProfile } from "@/server/user";
  * directly on any tab still sends a first-time user to the anamnesis.
  */
 export default async function TabsLayout({ children }: { children: React.ReactNode }) {
-  await requireProfile();
+  const { timezone } = await requireProfile();
 
   return (
     <div className="mx-auto flex min-h-dvh max-w-lg flex-col">
@@ -27,6 +28,9 @@ export default async function TabsLayout({ children }: { children: React.ReactNo
           sheets rising over each other reads as a bug, and on iOS the install
           is the prerequisite for push working at all. */}
       <PushPrompt />
+      {/* Renders nothing; writes only when the browser disagrees with the
+          account row, so this is a comparison on almost every visit. */}
+      <TimezoneSync current={timezone} />
     </div>
   );
 }

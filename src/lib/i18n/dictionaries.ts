@@ -239,6 +239,13 @@ export const en = {
   "session.reopenClearHint": "Wipes what was logged. Medals already earned stay.",
   "session.errNextStarted": "Next week's session of this day is already under way, so this one can no longer be changed — correcting it would delete real sets.",
   "session.edit": "Edit session",
+  "session.skip": "Skip this session",
+  "session.skipConfirm":
+    "It stays in the block as skipped, and next week's version of this day is written anyway — so the day keeps progressing.",
+  "session.skipped": "Skipped",
+  "session.skippedBody":
+    "You skipped this one. Next week's version of this day was written anyway, so nothing stalled.",
+  "session.unskip": "Put it back in the plan",
   "session.errEntryLogged": "Sets are already logged on this exercise — add or remove one instead.",
   "session.errWrongMuscle": "That exercise trains a different muscle group.",
   "session.set": "Set",
@@ -401,7 +408,8 @@ export const en = {
   "push.enable": "Turn on",
   "push.disable": "Turn off",
   "push.on": "On for this device.",
-  "push.off": "Off.",
+  "push.off": "Off",
+  "push.on2": "On",
   "push.blocked": "Blocked in your browser settings — turn notifications back on for this site to use them.",
   "push.test": "Send a test",
   "push.testSent": "Sent — it should arrive in a moment.",
@@ -416,6 +424,21 @@ export const en = {
   "notif.friendAccepted.body": "You can see each other's sessions and medals now.",
   "notif.test.title": "Notifications are on",
   "notif.test.body": "This is what one looks like. Nothing else to do.",
+
+  // Scheduled. These say what is true and what to do about it, and never guilt
+  // anyone for a missed session — the athlete already knows.
+  "notif.abandoned.title": "{label} is still open",
+  "notif.abandoned.body": "You started it and did not finish. Pick it up, or reopen it later.",
+  "notif.streak.title": "{weeks}-week streak ends Sunday",
+  "notif.streak.body": "One session this week keeps it going.",
+  "notif.lapsed.title": "Ready for a new block?",
+  "notif.lapsed.body": "Nothing has been running for a while. Pick a program and start week one.",
+
+  "settings.reminders": "Reminders",
+  "settings.remindersBody": "Only sent during your day, and never more than once each.",
+  "reminders.session.abandoned": "Unfinished workout",
+  "reminders.streak.atRisk": "Streak about to break",
+  "reminders.training.lapsed": "No block running",
 
   "auth.tagline": "Adaptive hypertrophy programming. Your next week is written from the last one.",
   "auth.signIn": "Sign in",
@@ -760,6 +783,13 @@ export const pt: Dictionary = {
   "session.reopenClearHint": "Apaga o que foi registrado. As medalhas já conquistadas ficam.",
   "session.errNextStarted": "O treino deste dia na próxima semana já começou, então este não pode mais ser alterado — corrigi-lo apagaria séries reais.",
   "session.edit": "Editar treino",
+  "session.skip": "Pular este treino",
+  "session.skipConfirm":
+    "Ele fica no bloco como pulado, e a versão da próxima semana deste dia é criada mesmo assim — então o dia continua progredindo.",
+  "session.skipped": "Pulado",
+  "session.skippedBody":
+    "Você pulou este treino. A versão da próxima semana deste dia foi criada mesmo assim, então nada travou.",
+  "session.unskip": "Devolver ao plano",
   "session.errEntryLogged": "Já há séries registradas neste exercício — adicione ou remova um em vez de trocar.",
   "session.errWrongMuscle": "Esse exercício treina outro grupo muscular.",
   "session.set": "Série",
@@ -923,7 +953,8 @@ export const pt: Dictionary = {
   "push.enable": "Ativar",
   "push.disable": "Desativar",
   "push.on": "Ativadas neste aparelho.",
-  "push.off": "Desativadas.",
+  "push.off": "Desativado",
+  "push.on2": "Ativado",
   "push.blocked": "Bloqueadas nas configurações do navegador — reative as notificações para este site para usá-las.",
   "push.test": "Enviar um teste",
   "push.testSent": "Enviada — deve chegar em instantes.",
@@ -935,6 +966,19 @@ export const pt: Dictionary = {
   "notif.friendAccepted.body": "Agora vocês veem os treinos e as medalhas um do outro.",
   "notif.test.title": "Notificações ativadas",
   "notif.test.body": "É assim que elas aparecem. Não precisa fazer mais nada.",
+
+  "notif.abandoned.title": "{label} continua aberto",
+  "notif.abandoned.body": "Você começou e não terminou. Retome agora, ou reabra depois.",
+  "notif.streak.title": "Sequência de {weeks} semanas acaba domingo",
+  "notif.streak.body": "Um treino esta semana mantém ela viva.",
+  "notif.lapsed.title": "Pronto para um novo bloco?",
+  "notif.lapsed.body": "Faz um tempo que nada está em andamento. Escolha um programa e comece a semana 1.",
+
+  "settings.reminders": "Lembretes",
+  "settings.remindersBody": "Enviados só durante o seu dia, e nunca mais de uma vez cada.",
+  "reminders.session.abandoned": "Treino não finalizado",
+  "reminders.streak.atRisk": "Sequência prestes a quebrar",
+  "reminders.training.lapsed": "Nenhum bloco em andamento",
 
   "auth.tagline": "Programação adaptativa de hipertrofia. Sua próxima semana nasce da anterior.",
   "auth.signIn": "Entrar",

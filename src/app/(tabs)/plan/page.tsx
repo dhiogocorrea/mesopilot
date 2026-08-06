@@ -112,10 +112,15 @@ export default async function PlanPage() {
   );
 }
 
-/** Ring for planned, half for in-progress, filled for done. */
+/** Ring for planned, half for in-progress, filled for done, hollow for skipped. */
 function StatusMark({ status }: { status: string }) {
   if (status === "completed") {
     return <span className="size-2 shrink-0 rounded-full bg-accent" aria-hidden="true" />;
+  }
+  if (status === "skipped") {
+    // A dash, not a ring: a skipped day is settled, and reading as "not done
+    // yet" would invite tapping it week after week.
+    return <span className="h-px w-2 shrink-0 bg-ink-3" aria-hidden="true" />;
   }
   if (status === "in_progress") {
     return (

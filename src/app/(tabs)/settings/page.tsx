@@ -22,6 +22,10 @@ export default async function SettingsPage() {
       email: true,
       emailVerifiedAt: true,
       oauthAccounts: { select: { provider: true } },
+      // Read here rather than inside the client component: fetching it there
+      // would need an action that takes a user id, and an id from a client says
+      // nothing about whose it is.
+      notificationOptOuts: { select: { kind: true } },
     },
   });
 
@@ -77,7 +81,7 @@ export default async function SettingsPage() {
 
         {/* Also removes itself when there is nothing to offer — a browser that
             cannot do push, or an iPhone that has not installed the app yet. */}
-        <PushSection />
+        <PushSection muted={(account?.notificationOptOuts ?? []).map((row) => row.kind)} />
 
         <Section label={t("settings.account")}>
           <p className="text-[13px] text-ink-3">{t("settings.signedInAs", { username })}</p>

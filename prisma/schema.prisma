@@ -57,20 +57,30 @@ model User {
   /// a random one it can never use would be worse than saying so.
   passwordHash String?
 
-  locale    String   @default("en") // Locale: "en" | "pt"
-  unit      String   @default("kg") // WeightUnit: "kg" | "lb"
+  locale String @default("en") // Locale: "en" | "pt"
+  unit   String @default("kg") // WeightUnit: "kg" | "lb"
+
+  /// IANA zone, e.g. "America/Sao_Paulo". Captured from the browser rather than
+  /// asked for, and null until a signed-in athlete opens the app once.
+  ///
+  /// Its job is *when*, not what: a reminder is only worth sending during
+  /// waking hours, and without this every scheduled send would land at whatever
+  /// time it happened to be on the server. Null is read as UTC.
+  timezone  String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  profile      Profile?
-  landmarks    UserMuscleLandmark[]
-  mesocycles   Mesocycle[]
-  exercises    Exercise[]
-  templates    ProgramTemplate[]
-  tracks       ProgramTrack[]
-  sessions     AuthSession[]
-  pushDevices  PushDevice[]
-  achievements UserAchievement[]
+  profile             Profile?
+  landmarks           UserMuscleLandmark[]
+  mesocycles          Mesocycle[]
+  exercises           Exercise[]
+  templates           ProgramTemplate[]
+  tracks              ProgramTrack[]
+  sessions            AuthSession[]
+  pushDevices         PushDevice[]
+  notifications       NotificationLog[]
+  notificationOptOuts NotificationOptOut[]
+  achievements        UserAchievement[]
 
   friendRequestsSent     Friendship[] @relation("FriendshipRequester")
   friendRequestsReceived Friendship[] @relation("FriendshipAddressee")
@@ -239,6 +249,57 @@ model PushDevice {
   @@index([userId])
 }
 
+/// One scheduled notification that has already been sent.
+///
+/// A cron that fires twice must not send twice, and unlike the friends feed —
+/// which is derived from the training data and therefore cannot disagree with
+/// it — a push is a side effect that cannot be re-derived or taken back. The
+/// unique constraint is the whole mechanism: the job claims the row first and
+/// only sends if the claim succeeded, so two overlapping runs race for the
+/// insert and exactly one wins.
+///
+/// `day` is a `YYYY-MM-DD` string in the *recipient's* zone, not the server's —
+/// "once a day" has to mean their day, or an athlete near the date line gets
+/// two.
+model NotificationLog {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// NotificationKind, from src/lib/types.ts.
+  kind String
+  day  String
+
+  sentAt DateTime @default(now())
+
+  @@unique([userId, kind, day])
+  @@index([userId])
+}
+
+/// A scheduled reminder this athlete has muted.
+///
+/// The absence of a row means subscribed — the same logic as a declined
+/// `Friendship` row, inverted: what is remembered is the "no". That keeps this
+/// table small, needs no migration to add a category, and means a new kind is
+/// on by default rather than silently off for everyone who signed up first.
+///
+/// Only the scheduled kinds are mutable. A friend request is a consequence of
+/// something the recipient is a party to, and the way to stop those is to turn
+/// notifications off.
+model NotificationOptOut {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// NotificationKind, from src/lib/types.ts.
+  kind String
+
+  createdAt DateTime @default(now())
+
+  @@unique([userId, kind])
+  @@index([userId])
+}
+
 /// Anamnesis. Feeds both the deterministic engine (experience level sets the
 /// starting RIR and progression aggressiveness) and the AI coaching layer.
 model Profile {
@@ -359,7 +420,7 @@ model Exercise {
   templateSlots    ProgramTemplateSlot[]
   sessionExercises SessionExercise[]
   /// Rows whose plan is this exercise while today runs a substitute.
-  plannedFor       SessionExercise[] @relation("PlannedExercise")
+  plannedFor       SessionExercise[]     @relation("PlannedExercise")
 }
 
 // ------------------------------------------------------------- templates

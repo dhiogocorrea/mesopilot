@@ -5,8 +5,9 @@ import webpush, { WebPushError } from "web-push";
 import { db } from "@/lib/db";
 import { createTranslator } from "@/lib/i18n";
 import type { DictionaryKey } from "@/lib/i18n/dictionaries";
-import { isLocale, type NotificationKind } from "@/lib/types";
+import { isLocale, isScheduledKind, type NotificationKind } from "@/lib/types";
 import { appUrl } from "./email";
+import { localDay } from "@/lib/time";
 
 /**
  * Reaching an athlete who is not looking at the app.
@@ -40,6 +41,9 @@ export type NotifyPayloads = {
   "friend.request": { name: string };
   "friend.accepted": { name: string };
   "test.ping": Record<string, never>;
+  "session.abandoned": { label: string };
+  "streak.atRisk": { weeks: number };
+  "training.lapsed": Record<string, never>;
 };
 
 type Template = {
@@ -69,6 +73,23 @@ const TEMPLATES = {
     title: "notif.test.title",
     body: "notif.test.body",
     url: "/settings",
+  },
+  "session.abandoned": {
+    title: "notif.abandoned.title",
+    body: "notif.abandoned.body",
+    // The logger itself, not the plan: the session is open and the point is to
+    // finish it.
+    url: "/",
+  },
+  "streak.atRisk": {
+    title: "notif.streak.title",
+    body: "notif.streak.body",
+    url: "/",
+  },
+  "training.lapsed": {
+    title: "notif.lapsed.title",
+    body: "notif.lapsed.body",
+    url: "/plan/new",
   },
 } satisfies Record<NotificationKind, Template>;
 
@@ -124,15 +145,28 @@ export async function notify<K extends NotificationKind>(
       where: { id: userId },
       select: {
         locale: true,
+        timezone: true,
         pushDevices: { select: { endpoint: true, p256dh: true, auth: true } },
+        notificationOptOuts: { where: { kind }, select: { id: true } },
       },
     });
 
     if (!user) return;
 
+    // Muted. Only scheduled kinds can ever have a row here — `setReminder`
+    // refuses the rest — but the check is unconditional so that stays true even
+    // if a row is written some other way.
+    if (user.notificationOptOuts.length > 0) return;
+
     // The one fan-out point. Email for athletes with no device would branch
     // here, and nowhere else.
     if (user.pushDevices.length === 0) return;
+
+    // Claim the day before sending. A push cannot be un-sent, so two overlapping
+    // cron runs racing for this insert — where exactly one wins — is the only
+    // safe direction to fail in. Reactive kinds skip it: they are caused by a
+    // person doing something, and two friend requests deserve two notifications.
+    if (isScheduledKind(kind) && !(await claimToday(userId, kind, user.timezone))) return;
 
     const t = createTranslator(isLocale(user.locale) ? user.locale : "en");
     const template = TEMPLATES[kind];
@@ -170,6 +204,30 @@ export async function notify<K extends NotificationKind>(
   } catch (error) {
     // Returns void and swallows: no caller can be made to depend on this.
     console.error(`[push] ${kind} to ${userId} failed`, error);
+  }
+}
+
+/**
+ * Reserves this kind for this athlete's *own* calendar day, returning false if
+ * it was already taken.
+ *
+ * The unique constraint does the work; this only has to distinguish "somebody
+ * else got there first" from a real failure. Catching the constraint violation
+ * rather than reading first and then writing is what makes it safe under two
+ * concurrent runs — a check-then-act would let both pass the check.
+ */
+async function claimToday(
+  userId: string,
+  kind: NotificationKind,
+  timezone: string | null,
+): Promise<boolean> {
+  try {
+    await db.notificationLog.create({
+      data: { userId, kind, day: localDay(new Date(), timezone) },
+    });
+    return true;
+  } catch {
+    return false;
   }
 }
 

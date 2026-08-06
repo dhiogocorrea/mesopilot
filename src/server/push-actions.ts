@@ -1,8 +1,11 @@
 "use server";
 
+import { revalidatePath } from "next/cache";
 import { z } from "zod";
 
 import { db } from "@/lib/db";
+import { safeZone } from "@/lib/time";
+import { isScheduledKind } from "@/lib/types";
 import { notify } from "./notify";
 import { getUserContext } from "./user";
 
@@ -72,4 +75,50 @@ export async function deletePushDevice(endpoint: string): Promise<void> {
 export async function sendTestPush(): Promise<void> {
   const { userId } = await getUserContext();
   await notify(userId, "test.ping", {});
+}
+
+/**
+ * Records where the athlete is, so a reminder lands during their day.
+ *
+ * Taken from the browser rather than asked for — nobody should have to pick
+ * their timezone from a list to avoid being woken up — and written only when it
+ * actually differs from what is stored, so this is not a write on every visit.
+ * `safeZone` rejects anything this runtime cannot resolve rather than storing a
+ * value the scheduler would later have to defend against.
+ */
+export async function setTimezone(timezone: string): Promise<void> {
+  const offered = z.string().min(1).max(64).parse(timezone);
+  const resolved = safeZone(offered);
+  if (resolved === "UTC" && offered !== "UTC") return;
+
+  const { userId } = await getUserContext();
+  await db.user.updateMany({ where: { id: userId, timezone: { not: resolved } }, data: { timezone: resolved } });
+}
+
+/**
+ * Muting or unmuting one scheduled reminder.
+ *
+ * Refuses anything that is not a scheduled kind. A friend request is a
+ * consequence of something the recipient is a party to, and the way to stop
+ * those is to turn notifications off entirely — offering a switch that silences
+ * them would leave someone wondering for weeks why nobody adds them.
+ */
+export async function setReminder(kind: string, enabled: boolean): Promise<void> {
+  const value = z.string().min(1).max(64).parse(kind);
+  if (!isScheduledKind(value)) throw new Error(`${value} is not a mutable reminder`);
+
+  const { userId } = await getUserContext();
+
+  if (enabled) {
+    // Absence of a row is the subscribed state, so unmuting is a delete.
+    await db.notificationOptOut.deleteMany({ where: { userId, kind: value } });
+  } else {
+    await db.notificationOptOut.upsert({
+      where: { userId_kind: { userId, kind: value } },
+      create: { userId, kind: value },
+      update: {},
+    });
+  }
+
+  revalidatePath("/settings");
 }

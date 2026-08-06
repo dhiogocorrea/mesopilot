@@ -27,6 +27,9 @@ export type UserContext = {
   username: string;
   locale: Locale;
   unit: WeightUnit;
+  /** IANA zone, or null until a browser has reported one. Decides *when* a
+   *  scheduled reminder is allowed to arrive, not what it says. */
+  timezone: string | null;
   hasProfile: boolean;
   experience: Experience;
   /** What the athlete said they can commit to. Drives program matching. */
@@ -58,6 +61,7 @@ export const getOptionalUserContext = cache(async (): Promise<UserContext | null
     username: user.username,
     locale: isLocale(user.locale) ? user.locale : "en",
     unit: user.unit === "lb" ? "lb" : "kg",
+    timezone: user.timezone,
     hasProfile: profile !== null,
     experience: (profile?.experience as Experience) ?? "intermediate",
     preferences: {

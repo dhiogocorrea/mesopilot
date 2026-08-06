@@ -69,8 +69,15 @@ export function currentStreakWeeks(sessionDates: readonly Date[]): number {
   return streak;
 }
 
-/** Whole weeks since the epoch, with weeks starting on Monday. */
-function weekIndex(date: Date): number {
+/**
+ * Whole weeks since the epoch, with weeks starting on Monday.
+ *
+ * Exported because the streak-at-risk reminder has to ask the same question the
+ * medal does — "which week is this session in" — and a second implementation
+ * that disagreed about where Monday falls would warn people whose streak is
+ * fine and miss the ones about to lose it.
+ */
+export function weekIndex(date: Date): number {
   const days = Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()) / 86_400_000;
   // 1 Jan 1970 was a Thursday, so the Monday before the epoch is day -3.
   // Shifting by 3 lands every boundary on a Monday; shifting by 4 — the
